@@ -27,7 +27,7 @@ void logger_task(void) {
                 //log_cache_write(log_msg.text);
                 flush_counter++;
                 //logger_write(log_msg.text);
-                printf("[LOG] %s\n", log_msg.text);
+                printf("[LOG %d] %s\n", flush_counter, log_msg.text);
                 sys_sem_post(&logger_sem);
             }
         }

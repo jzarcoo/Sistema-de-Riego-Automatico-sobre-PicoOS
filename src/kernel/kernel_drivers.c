@@ -1,11 +1,12 @@
 #include <stdint.h>
 #include <stdio.h>
+#include "hardware/adc.h"
 //#include "pico/stdlib.h"
 
 #include<user_app.h>
 
 /* SIO base address for GPIO control on the RP2040 */
-#define SIO_BASE 0xd0000000
+//#define SIO_BASE 0xd0000000
 #define SIO_GPIO_IN (SIO_BASE + 0x004)
 #define SIO_GPIO_OUT_SET (SIO_BASE + 0x014)
 #define SIO_GPIO_OUT_CLR (SIO_BASE + 0x018)
@@ -13,12 +14,12 @@
 #define SIO_GPIO_OE_CLR (SIO_BASE + 0x028)
 
 /* IO bank 0 base address */
-#define IO_BANK0_BASE 0x40014000
+// #define IO_BANK0_BASE 0x40014000
 #define IO_BANK0_GPIO_CTRL(pin) (IO_BANK0_BASE + 0x004 + (pin) * 8)
 #define GPIO_FUNC_SIO 5
 
 /* PADS Control for Pull-Up/Down */
-#define PADS_BANK0_BASE 0x4001c000
+// #define PADS_BANK0_BASE 0x4001c000
 #define PADS_GPIO(x) (PADS_BANK0_BASE + 0x04 + (x)*4)
 
 
@@ -37,48 +38,6 @@
  */
 #define IO_BANK0_INTR0_BASE (IO_BANK0_BASE + 0x0F0)
 
-
-
-/* ADC Registers */
-
-/* =========================
-   REGISTROS RP2040
-   ========================= */
-
-#define REG32(addr) (*(volatile uint32_t *)(addr))
-
-/* ADC */
-#define ADC_BASE 0x4004C000u
-
-#define ADC_CS      REG32(ADC_BASE + 0x00)
-#define ADC_RESULT  REG32(ADC_BASE + 0x04)
-
-
-/* ADC_CS bits */
-#define ADC_CS_EN           (1 << 0)
-#define ADC_CS_START_ONCE   (1 << 2)
-#define ADC_CS_READY        (1 << 8)
-
-/* IO BANK */
-//#define IO_BANK0_BASE 0x40014000u
-
-#define GPIO26_CTRL REG32(IO_BANK0_BASE + 0xD4)
-
-/* PADS BANK */
-//#define PADS_BANK0_BASE 0x4001C000u
-
-#define PAD26 REG32(PADS_BANK0_BASE + 0x6C)
-
-
-// #define ADC_BASE        0x4004C000
-
-// #define ADC_CS          (*(volatile uint32_t *)(ADC_BASE + 0x00))
-// #define ADC_RESULT      (*(volatile uint32_t *)(ADC_BASE + 0x04))
-
-// #define ADC_CS_EN               (1 << 0)
-// #define ADC_CS_START_ONCE       (1 << 3)
-// #define ADC_CS_READY            (1 << 8)
-// #define ADC_CS_AINSEL_LSB       12
 /**
  * @brief Initialize a GPIO pin for SIO and set its direction.
  * @param pin GPIO number.
@@ -182,42 +141,21 @@ void kernel_pump_off(void) {
     k_gpio_set(IRRIGATION_PUMP_PIN, 0);
 }
 
-
-void k_adc_init(void)
-{
-    /* Configure GPIO26 as ADC function */
-
-    volatile uint32_t *gpio_ctrl =
-        (volatile uint32_t *)IO_BANK0_GPIO_CTRL(26);
-
-    /* FUNCSEL = 0 -> ADC */
-    *gpio_ctrl &= ~0x1F;
-
-    /* Disable pull-up / pull-down */
-    volatile uint32_t *pad =
-        (volatile uint32_t *)PADS_GPIO(26);
-
-    *pad &= ~((1 << 2) | (1 << 3));
-
-    /* Enable ADC hardware */
-    ADC_CS |= ADC_CS_EN;
-}
-uint16_t k_adc_read(void)
-{
-    /* Select ADC0 = GPIO26 */
-    ADC_CS &= ~(0x7 << 12);
-
-    /* Start conversion */
-    ADC_CS |= ADC_CS_START_ONCE;
-
-    /* Wait until conversion finishes */
-    while (!(ADC_CS & ADC_CS_READY));
-
-    /* Read 12-bit ADC value */
-    return ADC_RESULT & 0xFFF;
+/**
+ * @brief Inicializa el ADC para leer el sensor de humedad del suelo. 
+ * Configura el pin correspondiente y selecciona la entrada ADC.
+ */
+void k_adc_init(void) {
+    adc_init();
+    adc_gpio_init(SOIL_MOISTURE_SENSOR_PIN);
+    adc_select_input(0);
 }
 
-int kernel_read_soil_sensor(void)
-{
-    return (int)k_adc_read();
+/**
+ * @brief Lee el valor del sensor de humedad del suelo a través del ADC.
+ * @return Valor de humedad (0-4095).
+ */
+int kernel_read_soil_sensor(void){
+    int value = adc_read();
+    return value;
 }

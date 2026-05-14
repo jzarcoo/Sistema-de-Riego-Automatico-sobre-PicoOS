@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h> 
+#include "pico/stdlib.h"
 
 #include "user_app.h"
 #include "message_queue.h"
@@ -25,6 +26,7 @@ static void perform_irrigation(void) {
 
     sys_pump_on();
     //delay_cycles_exact(3000000);
+    sleep_ms(1000); 
     sys_pump_off();
 
     sys_sem_post(&irrigation_pump_sem);
@@ -53,7 +55,7 @@ void irrigation_task(void) {
 
                     out_msg.type = MSG_LOG_TEXT;
                     strncpy(out_msg.text,
-                            "[LOG] Suelo seco. Regando...",
+                            "Suelo seco. Regando...",
                             sizeof(out_msg.text));
 
                     mq_send(&log_queue, &out_msg);
@@ -65,14 +67,14 @@ void irrigation_task(void) {
 
                     out_msg.type = MSG_LOG_TEXT;
                     strncpy(out_msg.text,
-                            "[LOG] Suelo Humedo.",
+                            "Suelo Humedo.",
                             sizeof(out_msg.text));
 
                     mq_send(&log_queue, &out_msg);
 
                     out_msg.type = MSG_DISPLAY_TEXT;
                     strncpy(out_msg.text,
-                            "SUELO: OK",
+                            "Suelo: Humedo.",
                             sizeof(out_msg.text));
 
                     mq_send(&display_queue, &out_msg);
@@ -83,7 +85,7 @@ void irrigation_task(void) {
 
                     out_msg.type = MSG_LOG_TEXT;
                     strncpy(out_msg.text,
-                            "[LOG] Riego Manual.",
+                            "Riego Manual.",
                             sizeof(out_msg.text));
 
                     mq_send(&log_queue, &out_msg);

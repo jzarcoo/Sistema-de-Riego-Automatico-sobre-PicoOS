@@ -18,6 +18,8 @@
 #define IRRIGATION_PUMP_PIN        17
 // Pin para el sensor de humedad del suelo
 #define SOIL_MOISTURE_SENSOR_PIN   26
+// Pin para el sensor de boton
+#define BUTTON_SENSOR_PIN   25
 
 // Semáforos
 extern semaphore_t irrigation_pump_sem;
