@@ -16,6 +16,7 @@
 .equ SYS_HEARTBEAT,    11
 .equ SYS_SEM_INIT,     12
 .equ SYS_ADC_INIT,     13
+.equ SYS_PULLUP,       14
 
 @ --- Function: void sys_gpio_dir(int pin, int out) ---
 .global sys_gpio_dir
@@ -166,6 +167,17 @@ sys_sem_init:
 sys_adc_init:
     mov r12, r7
     movs r7, #SYS_ADC_INIT
+    svc #0
+    mov r7, r12
+    bx lr
+
+@ --- Function: void sys_gpio_pullup(int pin) ---
+.global sys_gpio_pullup
+.type sys_gpio_pullup, %function
+sys_gpio_pullup:
+    @ r0: pin number
+    mov r12, r7
+    movs r7, #SYS_PULLUP
     svc #0
     mov r7, r12
     bx lr

@@ -19,11 +19,13 @@
 #define SYS_HEARTBEAT 11
 #define SYS_SEM_INIT 12
 #define SYS_ADC_INIT 13
+#define SYS_PULLUP 14
 
 // Declarations of kernel-level GPIO functions (defined in kernel_driver.c)
 extern void k_gpio_set(uint32_t pin, uint32_t value);
 extern int k_gpio_get(uint32_t pin);
 extern void k_gpio_init(uint32_t pin, uint32_t output);
+extern void k_gpio_pullup(uint32_t pin);
 // Declaration of scheduler exit function (defined in scheduler.c)
 extern void k_task_exit(void);
 
@@ -107,6 +109,10 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
 
         case SYS_ADC_INIT:
             k_adc_init();
+            break;
+
+        case SYS_PULLUP:
+            k_gpio_pullup(svc_args[0]);
             break;
 
         default:

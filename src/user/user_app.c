@@ -16,7 +16,7 @@ message_queue_t display_queue;
 void setup_irrigation(void){
     // Configurar el pin del botón como entrada (con pull-up)
     sys_gpio_dir(IRRIGATION_TRIGGER_PIN, 0);
-    // TODO: k_gpio_pullup(IRRIGATION_TRIGGER_PIN);
+    sys_gpio_pullup(IRRIGATION_TRIGGER_PIN);
 
     // Configurar el pin de la bomba como salida 
     sys_gpio_dir(IRRIGATION_PUMP_PIN, 1);

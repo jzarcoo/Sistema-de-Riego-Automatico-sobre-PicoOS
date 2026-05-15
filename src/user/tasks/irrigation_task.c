@@ -16,16 +16,13 @@
 static void perform_irrigation(void) {
     message_t out_msg;
 
-    // Mostrar estado de riego
     out_msg.type = MSG_DISPLAY_TEXT;
     strncpy(out_msg.text, "MODO: REGANDO", sizeof(out_msg.text));
     mq_send(&display_queue, &out_msg);
 
-    // Sección crítica de la bomba
     sys_sem_wait(&irrigation_pump_sem);
 
     sys_pump_on();
-    //delay_cycles_exact(3000000);
     sleep_ms(1000); 
     sys_pump_off();
 

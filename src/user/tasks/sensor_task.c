@@ -27,8 +27,7 @@ void sensor_task(void) {
             msg.type = MSG_SOIL_WET;
             mq_send(&irrigation_queue, &msg);
         }
-        //delay_cycles_exact(500000); 
 
-        sleep_ms(2000); // Esperar 1 segundo antes de la siguiente lectura
+        sleep_ms(5000);
     }
 }

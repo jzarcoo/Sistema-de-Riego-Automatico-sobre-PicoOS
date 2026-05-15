@@ -7,6 +7,9 @@
 
 #include "pico/stdlib.h"
 
+/**
+ * @brief Envia un mensaje a la cola de riego para activar el proceso de riego manualmente.
+ */
 void task(){
     message_t msg;
     msg.type = MSG_MANUAL_TRIGGER;
