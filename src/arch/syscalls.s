@@ -11,12 +11,15 @@
 .equ SYS_SEM_POST, 6
 .equ SYS_PUMP_ON,      7
 .equ SYS_PUMP_OFF,     8
-.equ SYS_READ_SENSOR,  9
+.equ SYS_READ_SOIL_SENSOR,  9
 .equ SYS_LOG_EVENT,    10
 .equ SYS_HEARTBEAT,    11
 .equ SYS_SEM_INIT,     12
 .equ SYS_ADC_INIT,     13
 .equ SYS_PULLUP,       14
+.equ SYS_GPIO_IRQ_INIT, 15
+.equ SYS_MANUAL_TRIGGER_EVENT_INIT, 16
+.equ SYS_REQUEST_IRRIGATION, 17
 
 @ --- Function: void sys_gpio_dir(int pin, int out) ---
 .global sys_gpio_dir
@@ -116,7 +119,17 @@ sys_pump_off:
 .type sys_read_soil_sensor, %function
 sys_read_soil_sensor:
     mov r12, r7
-    movs r7, #SYS_READ_SENSOR
+    movs r7, #SYS_READ_SOIL_SENSOR
+    svc #0
+    mov r7, r12
+    bx lr
+
+@ --- Function: void sys_manual_trigger_event_init(message_queue_t *queue) ---
+.global sys_manual_trigger_event_init
+.type sys_manual_trigger_event_init, %function
+sys_manual_trigger_event_init:
+    mov r12, r7
+    movs r7, #SYS_MANUAL_TRIGGER_EVENT_INIT
     svc #0
     mov r7, r12
     bx lr
@@ -178,6 +191,27 @@ sys_gpio_pullup:
     @ r0: pin number
     mov r12, r7
     movs r7, #SYS_PULLUP
+    svc #0
+    mov r7, r12
+    bx lr
+
+@ --- Function: void sys_gpio_irq_init(int pin) ---
+.global sys_gpio_irq_init
+.type sys_gpio_irq_init, %function
+sys_gpio_irq_init:
+    @ r0: pin number
+    mov r12, r7
+    movs r7, #SYS_GPIO_IRQ_INIT
+    svc #0
+    mov r7, r12
+    bx lr
+
+@ --- Function: void sys_request_irrigation(void) ---
+.global sys_request_irrigation
+.type sys_request_irrigation, %function
+sys_request_irrigation:
+    mov r12, r7
+    movs r7, #SYS_REQUEST_IRRIGATION
     svc #0
     mov r7, r12
     bx lr

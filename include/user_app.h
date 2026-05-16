@@ -4,29 +4,23 @@
 #include "semaphore.h"
 #include "message_queue.h"
 
-// Tareas para el Scheduler
+// IDs de tareas (para referencia)
 #define IRRIGATION_TASK_ID      0
 #define SENSOR_TASK_ID          1
 #define TRIGGER_TASK_ID         2
 #define LOGGER_TASK_ID          3
 #define DISPLAY_TASK_ID         4
 
-// Pines físicos asignados a la aplicación
-// Botón físico para iniciar el riego
-#define IRRIGATION_TRIGGER_PIN     16
-// Pin para controlar la bomba de agua
-#define IRRIGATION_PUMP_PIN        17
-// Pin para el sensor de humedad del suelo
-#define SOIL_MOISTURE_SENSOR_PIN   26
-// Pin para el sensor de boton
-#define BUTTON_SENSOR_PIN   25
+// Pines visibles para tareas de usuario (configurados via syscalls)
+#define BUTTON_SENSOR_PIN       25
+#define USER_TRIGGER_PIN        16
 
-// Semáforos
+// Semaforos compartidos entre tareas de usuario
 extern semaphore_t irrigation_pump_sem;
 extern semaphore_t logger_sem;
 extern semaphore_t display_sem;
 
-// Cola de mensajes 
+// Colas de mensajes compartidas entre tareas de usuario
 extern message_queue_t irrigation_queue;
 extern message_queue_t log_queue;
 extern message_queue_t display_queue;
@@ -38,8 +32,7 @@ void trigger_task(void);
 void logger_task(void);
 void display_task(void);
 
-// Inicializador para registrar las aplicaciones de usuario en el Kernel
+// Inicializacion del hardware de usuario (llamada desde la primera tarea)
 void setup_irrigation(void);
-void user_app_init(void);
 
 #endif // USER_APP_H

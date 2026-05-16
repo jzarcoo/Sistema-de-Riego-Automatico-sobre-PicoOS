@@ -1,66 +1,89 @@
-/**
- * @file syscalls.h
- * @brief Interfaz de syscalls para tareas de usuario.
- *
- * Las tareas en modo no privilegiado usan estas funciones para
- * solicitar servicios al kernel via instrucciones SVC.
- */
-
 #ifndef SYSCALLS_H
 #define SYSCALLS_H
 
 #include "semaphore.h"
 #include "message_queue.h"
 
-/** Establece nivel de salida de un GPIO */
+/**
+ * @file syscalls.h
+ * @brief Syscall interfaces for GPIO operations.
+ */
+
+/**
+ * @brief Syscalls interface for gpio write operation.
+ * @param pin GPIO pin number
+ * @param value 1 for high, 0 for low
+ */
 void sys_gpio_set(int pin, int value);
 
-/** Lee nivel de entrada de un GPIO */
+/**
+ * @brief Syscalls interface for gpio read operation.
+ * @param pin GPIO pin number
+ * @return 1 if high, 0 if low
+ */
 int sys_gpio_get(int pin);
 
-/** Inicializa un semaforo con valor inicial */
-void sys_sem_init(kernel_semaphore_t *sem, int valor_inicial);
+/**
+ * @brief Syscalls interface for gpio direction configuration.
+ * @param pin GPIO pin number
+ * @param output 1 for output, 0 for input
+ * @return 0 on success, -1 on error (e.g., invalid pin)
+ */
+int sys_gpio_dir(int pin, int output);
 
-/** Adquiere un semaforo (bloquea si no hay recursos) */
-void sys_sem_wait(kernel_semaphore_t *sem);
+/**
+ * @brief Syscalls interface for semaphore initialization.
+ * @param sem Pointer to the semaphore to initialize.
+ * @param valor_inicial Initial value for the semaphore.
+ */
+void sys_sem_init(semaphore_t *sem, int valor_inicial);
 
-/** Libera un semaforo */
-void sys_sem_post(kernel_semaphore_t *sem);
+/**
+ * @brief Syscalls interface for semaphore wait operation.
+ * @param sem Pointer to the semaphore to wait on.
+ */
+void sys_sem_wait(semaphore_t *sem);
 
-/** Lee el valor del sensor de humedad (0-4095) */
+/**
+ * @brief Syscalls interface for semaphore post operation.
+ * @param sem Pointer to the semaphore to post.
+ */
+void sys_sem_post(semaphore_t *sem);
+
+/**
+ * @brief Syscalls interface to enable internal pull-up resistor on a GPIO pin.
+ * @param pin GPIO pin number
+ */
+void sys_gpio_pullup(int pin);
+
+/**
+ * @brief Syscalls interface to enable GPIO interrupt handling for a pin.
+ * @param pin GPIO pin number
+ */
+void sys_gpio_irq_init(int pin);
+
+/**
+ * @brief Syscalls interface to initialize the ADC for soil moisture sensor.
+ */
+void sys_adc_init(void);
+
+/**
+ * @brief Syscalls interface to read the soil moisture sensor value.
+ * @return Sensor value 
+ */
 int sys_read_soil_sensor(void);
 
-/** Solicita un ciclo de riego al irrigation_manager */
-void sys_request_irrigation(void);
+void sys_manual_trigger_event_init(message_queue_t *queue);
 
-/** Reporta heartbeat al watchdog del kernel */
+void sys_pump_on(void);
+void sys_pump_off(void);
+void sys_request_irrigation(void);
+void sys_log_event(const char* event);
 void sys_heartbeat(void);
 
-/** Bloquea la tarea actual por ms milisegundos */
-void sys_sleep(uint32_t ms);
-
-/** Termina la tarea actual */
+/**
+ * @brief Syscalls interface to terminate a task.
+ */
 void sys_exit(void);
-
-/** Imprime texto por serial (via kernel) */
-void sys_print(const char* str);
-
-/** Escribe texto en una fila del display (no hace I2C, retorna inmediato) */
-void sys_display_write(int row, const char* text);
-
-/** Flush: envia el buffer al LCD via I2C */
-void sys_display_flush(void);
-
-/** Ejecuta irrigation_manager_update en modo privilegiado (accede GPIO) */
-void sys_irrigation_update(void);
-
-/** Inicializa filesystem + page cache (accede Flash, requiere privilegio) */
-void sys_logger_init(void);
-
-/** Escribe texto en la page cache del log */
-void sys_log_write(const char* text);
-
-/** Flush de paginas dirty a Flash */
-void sys_log_flush(void);
 
 #endif

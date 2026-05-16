@@ -57,7 +57,21 @@ call_scheduler:
     @ --- 6. ACTUALIZAR HARDWARE Y SALIR ---
     msr psp, r0         @ Cargar el nuevo Process Stack Pointer al hardware
 
+    @ Forzar modo unprivileged para tareas de usuario
+    movs r0, #3         @ nPRIV=1, SPSEL=1 (unprivileged, use PSP)
+    msr control, r0
+    isb                 @ Ensure effect before exception return
+
+    bx r3               @ ¡Salto de fe! Volver a tarea con r3=0xFFFFFFFD (thread unprivileged)
+
 return_idle:
-    @ Si veniamos de main y seguimos sin tareas, r3 = 0xFFFFFFF9 (Sigue en MSP)
-    @ Si se selecciono una tarea, r3 = 0xFFFFFFFD (Cambia a PSP)
-    bx r3               @ ¡Salto de fe! El hardware restaurara r0-r3, r12, LR, PC y xPSR automaticamente.
+    @ Si veniamos de main y seguimos sin tareas, volvemos a MSP (idle/kernel)
+    @ Forzar modo privilegiado para idle/kernel
+    movs r0, #0
+    msr control, r0     @ Modo privilegiado, MSP
+    isb
+
+    @ Cargar explícitamente el EXC_RETURN para volver a handler mode con MSP
+    ldr r3, =0xFFFFFFF9 @ Return to handler, MSP, privileged
+
+    bx r3               @ Exception return: restaurar registros y pasar a idle

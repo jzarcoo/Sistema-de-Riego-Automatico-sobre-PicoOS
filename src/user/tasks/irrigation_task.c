@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include <string.h> 
+#include <string.h>
 #include "pico/stdlib.h"
 
 #include "user_app.h"
@@ -22,9 +22,7 @@ static void perform_irrigation(void) {
 
     sys_sem_wait(&irrigation_pump_sem);
 
-    sys_pump_on();
-    sleep_ms(1000); 
-    sys_pump_off();
+    sys_request_irrigation();
 
     sys_sem_post(&irrigation_pump_sem);
 
@@ -38,8 +36,10 @@ static void perform_irrigation(void) {
  * @brief Tarea de riego.
  */
 void irrigation_task(void) {
+    setup_irrigation();
+
     message_t msg;
-    message_t out_msg; 
+    message_t out_msg;
 
     while (1) {
         sys_heartbeat();
@@ -88,6 +88,9 @@ void irrigation_task(void) {
                     mq_send(&log_queue, &out_msg);
 
                     perform_irrigation();
+                    break;
+
+                default:
                     break;
             }
         }

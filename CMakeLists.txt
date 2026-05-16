@@ -19,8 +19,10 @@ add_executable(ProyectoFinal
     
     # === ARCHIVOS DEL KERNEL ===
     src/kernel/filesystem.c
+    src/kernel/irrigation_manager.c
     src/kernel/kernel_drivers.c
     src/kernel/kernel_service.c
+    src/kernel/kernel_events.c
     src/kernel/log_memory.c
     src/kernel/logger.c
     src/kernel/message_queue.c
@@ -37,7 +39,10 @@ add_executable(ProyectoFinal
     src/user/tasks/trigger_task.c
 )
 
-target_include_directories(ProyectoFinal PRIVATE include)
+target_include_directories(ProyectoFinal PRIVATE
+    include
+    include/kernel
+)
 
 pico_enable_stdio_usb(ProyectoFinal 1)
 pico_enable_stdio_uart(ProyectoFinal 1) # 
@@ -52,4 +57,5 @@ target_link_libraries(ProyectoFinal
     hardware_uart
     hardware_watchdog
     hardware_sync # -
+    hardware_irq
 )

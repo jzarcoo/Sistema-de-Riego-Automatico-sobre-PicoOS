@@ -1,9 +1,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "hardware/adc.h"
-//#include "pico/stdlib.h"
-
-#include<user_app.h>
+#include "hardware/irq.h"
+#include "kernel_hw_config.h"
+#include "kernel_events.h"
 
 /* SIO base address for GPIO control on the RP2040 */
 //#define SIO_BASE 0xd0000000
@@ -131,6 +131,17 @@ void k_gpio_irq_clear(uint32_t pin) {
     
     // Clear both edges by writing 1s (W1C)
     *intr_reg = (1 << (shift + 2)) | (1 << (shift + 3));
+}
+
+static void gpio_button_irq_handler(void) {
+    k_gpio_irq_clear(IRRIGATION_TRIGGER_PIN);
+    k_send_manual_trigger_from_isr();
+}
+
+void k_gpio_irq_init(uint32_t pin) {
+    k_gpio_irq_enable(pin, 0); // Falling edge
+    irq_set_exclusive_handler(IO_IRQ_BANK0, gpio_button_irq_handler);
+    irq_set_enabled(IO_IRQ_BANK0, true);
 }
 
 void kernel_pump_on(void) {

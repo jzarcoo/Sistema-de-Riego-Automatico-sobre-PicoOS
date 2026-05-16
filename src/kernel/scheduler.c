@@ -40,12 +40,11 @@ void init_task_stack(int id) {
 void task_create(int id, void (*entry_point)(void)) {
     if (id >= 0 && id < MAX_TASKS) {
         tasks[id].entry_point = entry_point;
-        tasks[id].state = DORMANT;
+        tasks[id].state = READY;
         tasks[id].quantum = 10; 
         tasks[id].remaining_ticks = 10;
         tasks[id].heartbeat = 1;
         tasks[id].last_seen = kernel_ticks;
-        // TODO: CHECK  
         init_task_stack(id);
     }
 }
@@ -133,4 +132,8 @@ uint32_t schedule(uint32_t current_sp) {
 
     // If no task is ready, keep the current context
     return current_sp; 
+}
+
+void SysTick_Handler(void) {
+    isr_systick();
 }
