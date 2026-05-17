@@ -5,8 +5,6 @@
 
 #include "scheduler.h"
 #include "irrigation_manager.h"
-#include "user_app.h"
-#include "syscalls.h"
 
 // Prototipos de las tareas de usuario (definidas en src/user/tasks/)
 extern void irrigation_task(void);
@@ -75,30 +73,24 @@ void log_incident(uint32_t fault_pc) {
     printf("\n[!] =============================================\n");
 }
 
-/**
- * @brief C-part of the fault handler.
- */
 void HardFault_Handler_C(uint32_t *stack_frame) {
     log_incident(stack_frame[6]);
-    sys_exit(); // Terminar la tarea actual que causó el hard fault
+    tasks[current_task].state = DORMANT;
+    printf("[MPU] Tarea %d terminada por acceso ilegal.\n", current_task + 1);
+    *(volatile uint32_t *)0xE000ED04 = (1 << 28);
 }
 
-/**
- * @brief Assembly entry for HardFault 
- */
 void __attribute__((naked)) HardFault_Handler(void) {
     __asm volatile(
+        "mov r0, lr            \n"
         "movs r1, #4           \n"
-        "mov  r0, lr           \n"
-        "tst  r0, r1           \n"
-        "beq  use_msp          \n"
-        // usa process stack pointer (PSP)
-        "mrs  r0, psp          \n"
-        "b    call_handler     \n"
-        // usa main stack pointer (MSP)
+        "tst r0, r1            \n"
+        "beq use_msp           \n"
+        "mrs r0, psp           \n"
+        "b call_c              \n"
         "use_msp:              \n"
-        "mrs  r0, msp          \n"
-        "call_handler:         \n"
+        "mrs r0, msp           \n"
+        "call_c:               \n"
         "b HardFault_Handler_C \n"
     );
 }
@@ -136,16 +128,6 @@ void mpu_init(void) {
     __asm volatile("isb"); // Instruction Synchronization Barrier
 }
 
-static inline void drop_privileges(void) {
-    __asm volatile (
-        "movs r0, #3     \n"
-        "msr control, r0 \n"
-        "isb             \n"
-        :
-        :
-        : "r0", "memory"
-    );
-}
 
 int main() {
     stdio_init_all();
@@ -172,9 +154,6 @@ int main() {
     __asm volatile ("msr psp, %0" : : "r" (0));
 
     systick_init(1250000);
-
-    // Modo no privilegiado
-    drop_privileges();
 
     while (1) {
         irrigation_manager_update();

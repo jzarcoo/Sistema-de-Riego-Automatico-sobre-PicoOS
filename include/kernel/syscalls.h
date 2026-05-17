@@ -84,6 +84,8 @@ void sys_heartbeat(void);
 /**
  * @brief Syscalls interface to terminate a task.
  */
+void sys_sleep(uint32_t ms);
+
 void sys_exit(void);
 
 #endif

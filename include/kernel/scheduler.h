@@ -21,12 +21,13 @@ typedef struct {
     uint32_t *sp;                  // Puntero de Pila actual
     task_state_t state;            // Estado de la tarea
     uint32_t stack[STACK_SIZE];    // Espacio de memoria de la pila
-    int quantum;                   // Quantum asignado 
-    int remaining_ticks;           // Ticks restantes 
+    int quantum;                   // Quantum asignado
+    int remaining_ticks;           // Ticks restantes
     void (*entry_point)(void);     // Función de la tarea
-        
+
     uint32_t heartbeat;
     uint32_t last_seen;
+    uint32_t wake_tick;            // Tick en el que debe despertar (0 = no duerme)
 } tcb_t;
 
 
@@ -41,6 +42,7 @@ extern volatile uint32_t kernel_ticks;
 void scheduler_init(void);
 void task_create(int id, void (*entry_point)(void));
 void k_task_exit(void);
+void k_task_sleep(uint32_t ms);
 uint32_t schedule(uint32_t current_sp);
 
 #endif

@@ -20,6 +20,7 @@
 .equ SYS_GPIO_IRQ_INIT, 15
 .equ SYS_MANUAL_TRIGGER_EVENT_INIT, 16
 .equ SYS_REQUEST_IRRIGATION, 17
+.equ SYS_SLEEP, 18
 
 @ --- Function: void sys_gpio_dir(int pin, int out) ---
 .global sys_gpio_dir
@@ -212,6 +213,17 @@ sys_gpio_irq_init:
 sys_request_irrigation:
     mov r12, r7
     movs r7, #SYS_REQUEST_IRRIGATION
+    svc #0
+    mov r7, r12
+    bx lr
+
+@ --- Function: void sys_sleep(uint32_t ms) ---
+.global sys_sleep
+.type sys_sleep, %function
+sys_sleep:
+    @ r0: milliseconds to sleep
+    mov r12, r7
+    movs r7, #SYS_SLEEP
     svc #0
     mov r7, r12
     bx lr

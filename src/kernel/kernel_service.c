@@ -24,6 +24,7 @@
 #define SYS_GPIO_IRQ_INIT 15
 #define SYS_MANUAL_TRIGGER_EVENT_INIT 16
 #define SYS_REQUEST_IRRIGATION 17
+#define SYS_SLEEP 18
 
 /*
  * @brief Kernel service handler for system calls.
@@ -107,6 +108,10 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
 
         case SYS_REQUEST_IRRIGATION:
             irrigation_manager_request_water();
+            break;
+
+        case SYS_SLEEP:
+            k_task_sleep(svc_args[0]);
             break;
 
         default:

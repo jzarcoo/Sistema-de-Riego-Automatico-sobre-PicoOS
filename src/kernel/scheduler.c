@@ -55,21 +55,27 @@ void task_create(int id, void (*entry_point)(void)) {
 void isr_systick() {
     kernel_ticks++;
 
-    // ==
-    // watchdog
     for (int i = 0; i < MAX_TASKS; i++) {
         if (tasks[i].state == DORMANT)
             continue;
+
+        // Despertar tareas dormidas y renovar heartbeat automaticamente
+        if (tasks[i].state == BLOCKED && tasks[i].wake_tick != 0) {
+            tasks[i].last_seen = kernel_ticks;
+            if (kernel_ticks >= tasks[i].wake_tick) {
+                tasks[i].wake_tick = 0;
+                tasks[i].state = READY;
+            }
+            continue;
+        }
+
+        // Watchdog: matar tareas que no responden
         if ((kernel_ticks - tasks[i].last_seen) > TASK_TIMEOUT_TICKS) {
             printf("[WATCHDOG] Tarea %d no responde, reiniciando...\n", i + 1);
-            /*
-             * Reinicio de tarea
-             */
             task_create(i, tasks[i].entry_point);
             printf("[WATCHDOG] Tarea %d reiniciada.\n", i + 1);
         }
     }
-    // ===
 
     if (current_task != -1) {
         if (--tasks[current_task].remaining_ticks > 0) {
@@ -132,6 +138,15 @@ uint32_t schedule(uint32_t current_sp) {
 
     // If no task is ready, keep the current context
     return current_sp; 
+}
+
+void k_task_sleep(uint32_t ms) {
+    if (current_task < 0) return;
+    uint32_t ticks = ms / 10;
+    if (ticks == 0) ticks = 1;
+    tasks[current_task].wake_tick = kernel_ticks + ticks;
+    tasks[current_task].state = BLOCKED;
+    *(volatile uint32_t *)0xE000ED04 = (1 << 28);
 }
 
 void SysTick_Handler(void) {
