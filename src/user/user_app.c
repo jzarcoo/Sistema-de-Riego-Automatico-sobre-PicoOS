@@ -1,6 +1,7 @@
 #include "user_app.h"
 #include "syscalls.h"
 #include "message_queue.h"
+#include "scheduler.h"
 #include<stdio.h>
 
 semaphore_t irrigation_pump_sem;
