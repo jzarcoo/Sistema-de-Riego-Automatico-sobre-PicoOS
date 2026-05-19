@@ -1,9 +1,9 @@
 #include <stdint.h>
 #include <stdio.h>
+#include "pico/multicore.h"
 #include "hardware/adc.h"
 #include "hardware/irq.h"
 #include "kernel_hw_config.h"
-#include "kernel_events.h"
 
 /* SIO base address for GPIO control on the RP2040 */
 //#define SIO_BASE 0xd0000000
@@ -30,6 +30,7 @@
  * INTE3: Pins 24-29 (Offset 0x10C)
  */
 #define IO_BANK0_PROC0_INTE0_BASE (IO_BANK0_BASE + 0x100)
+#define IO_BANK0_PROC1_INTE0_BASE (IO_BANK0_BASE + 0x110)
 
 /* * RAW INTERRUPT STATUS (INTR)
  * INTR0: Pins 0-7   (Offset 0x0F0)
@@ -83,9 +84,14 @@ int k_gpio_get(uint32_t pin)
  */
 void k_gpio_pullup(uint32_t pin) {
     volatile uint32_t *pad_ctrl = (volatile uint32_t *)PADS_GPIO(pin);
-    // Bit 3 = PUE (Pull Up Enable), Bit 2 = PDE (Pull Down Enable)
-    *pad_ctrl |= (1 << 3); 
+    *pad_ctrl |= (1 << 3);
     *pad_ctrl &= ~(1 << 2);
+}
+
+void k_gpio_pulldown(uint32_t pin) {
+    volatile uint32_t *pad_ctrl = (volatile uint32_t *)PADS_GPIO(pin);
+    *pad_ctrl |= (1 << 2);
+    *pad_ctrl &= ~(1 << 3);
 }
 
 /**
@@ -94,27 +100,24 @@ void k_gpio_pullup(uint32_t pin) {
  * @param rising_edge 1 for rising edge, 0 for falling edge.
  */
 void k_gpio_irq_enable(uint32_t pin, uint32_t rising_edge) {
-    // Compute which INTE register this pin maps to (0, 1, 2, or 3)
-    // Pin 15 -> Bank 1
     uint32_t bank_idx = pin / 8;
-    
-    // Compute the shift within that register (0 to 7)
-    // Pin 15 -> Shift 7 (within the bank)
     uint32_t pin_in_bank = pin % 8;
-    
-    // Each pin uses 4 bits, so multiply by 4
-    // Pin 15 -> Bits 28-31 of INTE1
     uint32_t shift = pin_in_bank * 4;
 
-    // Get address of the correct register
-    volatile uint32_t *inte_reg = (volatile uint32_t *)(IO_BANK0_PROC0_INTE0_BASE + (bank_idx * 4));
+    uint32_t inte_base = (get_core_num() == 0)
+        ? IO_BANK0_PROC0_INTE0_BASE
+        : IO_BANK0_PROC1_INTE0_BASE;
 
-    // Write configuration (+2 Edge Low, +3 Edge High)
+    volatile uint32_t *inte_reg = (volatile uint32_t *)(inte_base + (bank_idx * 4));
+
     if (rising_edge) {
-        *inte_reg |= (1 << (shift + 3)); 
+        *inte_reg |= (1 << (shift + 3));
     } else {
-        *inte_reg |= (1 << (shift + 2)); 
+        *inte_reg |= (1 << (shift + 2));
     }
+
+    printf("[IRQ_EN] pin=%d core=%d reg=0x%08X val=0x%08X\n",
+           pin, get_core_num(), (uint32_t)inte_reg, *inte_reg);
 }
 
 /**
@@ -133,16 +136,6 @@ void k_gpio_irq_clear(uint32_t pin) {
     *intr_reg = (1 << (shift + 2)) | (1 << (shift + 3));
 }
 
-static void gpio_button_irq_handler(void) {
-    k_gpio_irq_clear(IRRIGATION_TRIGGER_PIN);
-    k_send_manual_trigger_from_isr();
-}
-
-void k_gpio_irq_init(uint32_t pin) {
-    k_gpio_irq_enable(pin, 0); // Falling edge
-    irq_set_exclusive_handler(IO_IRQ_BANK0, gpio_button_irq_handler);
-    irq_set_enabled(IO_IRQ_BANK0, true);
-}
 
 void kernel_pump_on(void) {
     k_gpio_set(IRRIGATION_PUMP_PIN, 1);

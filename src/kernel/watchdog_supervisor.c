@@ -1,13 +1,12 @@
 #include "watchdog_supervisor.h"
 #include "scheduler.h"
-
-extern volatile uint32_t kernel_ticks;
-extern int current_task;
-extern tcb_t tasks[MAX_TASKS];
+#include "pico/multicore.h"
 
 void kernel_task_heartbeat(void) {
-    if (current_task >= 0) {
-        tasks[current_task].last_seen = kernel_ticks;
-        tasks[current_task].heartbeat++;
+    int core_id = get_core_num();
+    core_scheduler_t *sched = &core_schedulers[core_id];
+    if (sched->current_task >= 0) {
+        sched->tasks[sched->current_task].last_seen = sched->kernel_ticks;
+        sched->tasks[sched->current_task].heartbeat++;
     }
 }

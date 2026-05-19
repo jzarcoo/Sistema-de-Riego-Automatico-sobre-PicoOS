@@ -50,12 +50,13 @@ pico_enable_stdio_uart(ProyectoFinal 1) #
 pico_add_extra_outputs(ProyectoFinal)
 
 target_link_libraries(ProyectoFinal
-    pico_stdlib #
+    pico_stdlib
+    pico_multicore
     hardware_adc
-    hardware_exception #
-    hardware_flash # -
+    hardware_exception
+    hardware_flash
     hardware_uart
     hardware_watchdog
-    hardware_sync # -
+    hardware_sync
     hardware_irq
 )

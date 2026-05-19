@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
 #include "hardware/sync.h"
 
 #include "filesystem.h"
@@ -8,30 +9,35 @@
 // Puntero para leer la memoria Flash directamente mapeada (XIP - Execute In Place)
 const MetaData_Table* fs_meta = (const MetaData_Table*)(FS_BASE_ADDRESS);
 
+static uint32_t flash_saved_ints;
+
+static void flash_safe_begin(void) {
+    multicore_lockout_start_blocking();
+    flash_saved_ints = save_and_disable_interrupts();
+}
+
+static void flash_safe_end(void) {
+    restore_interrupts(flash_saved_ints);
+    multicore_lockout_end_blocking();
+}
+
 // --- MÓDULO 1: Inicialización y Superbloque ---
 
 // fs_format() se entrega resuelta como ejemplo de uso de la API de Flash
 void fs_format() {
-    // 1. Deshabilitar interrupciones antes de tocar la Flash
-    uint32_t ints = save_and_disable_interrupts();
-
-    // 2. Borrar el sector completo (4096 bytes)
-    flash_range_erase(FS_BASE_OFFSET, FLASH_SECTOR_SIZE);
-
-    // 3. Crear los nuevos metadatos en RAM
     MetaData_Table new_meta;
     memset(&new_meta, 0xFF, sizeof(MetaData_Table));
     new_meta.magic_number = MAGIC_NUMBER;
     new_meta.total_size = 0;
 
-    // 4. Preparar el buffer del tamaño exacto (múltiplo de 256 bytes)
     uint8_t meta_buf[META_PROGRAM_SIZE];
     memset(meta_buf, 0xFF, META_PROGRAM_SIZE);
     memcpy(meta_buf, &new_meta, sizeof(MetaData_Table));
 
-    // 5. Programar la Flash y restaurar interrupciones
+    flash_safe_begin();
+    flash_range_erase(FS_BASE_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(FS_BASE_OFFSET, meta_buf, META_PROGRAM_SIZE);
-    restore_interrupts(ints);
+    flash_safe_end();
 
     printf("FS: Formateado exitosamente.\n");
 }
@@ -86,12 +92,10 @@ int fs_create(const char* name) {
         printf("FS Error: No hay espacio para más archivos.\n");
         return -1;
     }
-    uint32_t ints = save_and_disable_interrupts();
-    flash_range_erase(FS_BASE_OFFSET, FLASH_SECTOR_SIZE);
 
     MetaData_Table updated_meta;
     memcpy(&updated_meta, fs_meta, sizeof(MetaData_Table));
-    
+
     strncpy(updated_meta.entries[free_index].name, name, 12);
     updated_meta.entries[free_index].offset = next_free_offset;
     updated_meta.entries[free_index].size = 0;
@@ -101,9 +105,11 @@ int fs_create(const char* name) {
     memset(meta_buf, 0xFF, META_PROGRAM_SIZE);
     memcpy(meta_buf, &updated_meta, sizeof(MetaData_Table));
 
+    flash_safe_begin();
+    flash_range_erase(FS_BASE_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(FS_BASE_OFFSET, meta_buf, META_PROGRAM_SIZE);
-    restore_interrupts(ints);
-    
+    flash_safe_end();
+
     return free_index;
 }
 
@@ -155,29 +161,21 @@ int fs_write(const char* name, const uint8_t* data, uint32_t size) {
         }
     }
 
-    // 3. Usa save_and_disable_interrupts() y borra los sectores necesarios.
-    int ints = save_and_disable_interrupts();
-    flash_range_erase(offset, total_size);
-    // 4. Programa los datos en la Flash iterando en bloques de FLASH_PAGE_SIZE (256 bytes).
-    //    Asegúrate de no escribir fuera del tamaño de los datos pasados en el parámetro.
     uint8_t page_buf[FLASH_PAGE_SIZE];
+
+    flash_safe_begin();
+    flash_range_erase(offset, total_size);
     for (int i = 0; i < size; i += FLASH_PAGE_SIZE) {
         memset(page_buf, 0xFF, FLASH_PAGE_SIZE);
         int block_size = size - i > FLASH_PAGE_SIZE ? FLASH_PAGE_SIZE : (size - i);
         memcpy(page_buf, data + i, block_size);
         flash_range_program(offset + i, page_buf, FLASH_PAGE_SIZE);
     }
-    // 5. Restaura las interrupciones.
-    restore_interrupts(ints);
-    // 6. Si el archivo cambió de tamaño, actualiza 'size' en una copia de los metadatos y reescribe
-    //    el bloque del superbloque (Sector 0) para guardar el nuevo tamaño de forma persistente.
+    flash_safe_end();
 
     if (size == fs_meta->entries[target_idx].size) {
-        return 0; 
+        return 0;
     }
-
-    int ints2 = save_and_disable_interrupts();
-    flash_range_erase(FS_BASE_OFFSET, FLASH_SECTOR_SIZE);
 
     MetaData_Table updated_meta;
     memcpy(&updated_meta, fs_meta, sizeof(MetaData_Table));
@@ -187,8 +185,10 @@ int fs_write(const char* name, const uint8_t* data, uint32_t size) {
     memset(meta_buf, 0xFF, META_PROGRAM_SIZE);
     memcpy(meta_buf, &updated_meta, sizeof(MetaData_Table));
 
+    flash_safe_begin();
+    flash_range_erase(FS_BASE_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(FS_BASE_OFFSET, meta_buf, META_PROGRAM_SIZE);
-    restore_interrupts(ints2);
+    flash_safe_end();
 
     return 0;
 }
@@ -237,20 +237,19 @@ int fs_delete(const char* name) {
         printf("FS Error: Archivo '%s' no encontrado para borrar.\n", name);
         return -1;
     }
-    // 2. Haz una copia de fs_meta en una variable local 'updated_meta'.
     MetaData_Table updated_meta;
     memcpy(&updated_meta, fs_meta, sizeof(MetaData_Table));
-    // 3. Cambia el estado de la entrada encontrada a STATUS_DELETED.
     updated_meta.entries[target_idx].status = STATUS_DELETED;
-    // 4. Usa las rutinas de Flash (erase y program) para sobrescribir los metadatos.
-    int ints = save_and_disable_interrupts();
-    flash_range_erase(FS_BASE_OFFSET, FLASH_SECTOR_SIZE);
+
     uint8_t meta_buf[META_PROGRAM_SIZE];
     memset(meta_buf, 0xFF, META_PROGRAM_SIZE);
     memcpy(meta_buf, &updated_meta, sizeof(MetaData_Table));
+
+    flash_safe_begin();
+    flash_range_erase(FS_BASE_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(FS_BASE_OFFSET, meta_buf, META_PROGRAM_SIZE);
-    restore_interrupts(ints);
-    // Nota: NO borres los datos del archivo en la Flash, solo actualiza el estado.
+    flash_safe_end();
+
     return 0;
 }
 
@@ -276,8 +275,6 @@ void fs_dump() {
 }
 
 void fs_compact(){
-    int ints = save_and_disable_interrupts();
-
     MetaData_Table updated_meta;
     memcpy(&updated_meta, fs_meta, sizeof(MetaData_Table));
 
@@ -286,13 +283,16 @@ void fs_compact(){
     for (int i = 0; i < MAX_FILES; i++) {
         if (fs_meta->entries[i].status == STATUS_OCCUPIED) {
             order[count++] = i;
-        }else{
+        } else {
             updated_meta.entries[i].status = STATUS_FREE;
             updated_meta.entries[i].offset = 0;
             updated_meta.entries[i].size = 0;
             memset(updated_meta.entries[i].name, 0, 12);
         }
     }
+
+    flash_safe_begin();
+
     for (int i = 0; i < count; i++) {
         int idx = order[i];
         if (i == 0) {
@@ -304,25 +304,19 @@ void fs_compact(){
             updated_meta.entries[idx].offset = updated_meta.entries[prev_idx].offset + prev_sectors * FLASH_SECTOR_SIZE;
             if (updated_meta.entries[idx].offset != fs_meta->entries[idx].offset) {
                 uint8_t page_buf[FLASH_PAGE_SIZE];
-
                 int file_size = updated_meta.entries[idx].size;
-
                 const uint8_t* data = (const uint8_t*)(XIP_BASE + fs_meta->entries[idx].offset);
-
                 int sectors_needed = (file_size == 0) ? 1 : ((file_size + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE);
                 int total_size = sectors_needed * FLASH_SECTOR_SIZE;
 
                 flash_range_erase(updated_meta.entries[idx].offset, total_size);
 
-                for (int j = 0; j < file_size; j += FLASH_PAGE_SIZE){
+                for (int j = 0; j < file_size; j += FLASH_PAGE_SIZE) {
                     memset(page_buf, 0xFF, FLASH_PAGE_SIZE);
                     int block_size = file_size - j > FLASH_PAGE_SIZE ? FLASH_PAGE_SIZE : (file_size - j);
                     memcpy(page_buf, data + j, block_size);
                     flash_range_program(updated_meta.entries[idx].offset + j, page_buf, FLASH_PAGE_SIZE);
-                
                 }
-
-
             }
         }
     }
@@ -333,7 +327,8 @@ void fs_compact(){
 
     flash_range_erase(FS_BASE_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(FS_BASE_OFFSET, meta_buf, META_PROGRAM_SIZE);
-    restore_interrupts(ints);   
+
+    flash_safe_end();
 }
 
 /**
@@ -400,75 +395,31 @@ int fs_write_append(const char* name,
            data,
            size);
 
-    uint32_t ints = save_and_disable_interrupts();
-
-    /*
-     * Erase full region
-     */
-
-    flash_range_erase(
-        fs_meta->entries[target_idx].offset,
-        total_size
-    );
-
-    /*
-     * Rewrite complete file
-     */
-
     uint8_t page_buf[FLASH_PAGE_SIZE];
 
-    for (uint32_t i = 0;
-         i < total_size;
-         i += FLASH_PAGE_SIZE) {
+    flash_safe_begin();
 
-        memcpy(page_buf,
-               temp_buffer + i,
-               FLASH_PAGE_SIZE);
+    flash_range_erase(fs_meta->entries[target_idx].offset, total_size);
 
-        flash_range_program(
-            fs_meta->entries[target_idx].offset + i,
-            page_buf,
-            FLASH_PAGE_SIZE
-        );
+    for (uint32_t i = 0; i < total_size; i += FLASH_PAGE_SIZE) {
+        memcpy(page_buf, temp_buffer + i, FLASH_PAGE_SIZE);
+        flash_range_program(fs_meta->entries[target_idx].offset + i, page_buf, FLASH_PAGE_SIZE);
     }
 
-    restore_interrupts(ints);
-
-    /*
-     * Update metadata size
-     */
+    flash_safe_end();
 
     MetaData_Table updated_meta;
-
-    memcpy(&updated_meta,
-           fs_meta,
-           sizeof(MetaData_Table));
-
-    updated_meta.entries[target_idx].size =
-        new_size;
+    memcpy(&updated_meta, fs_meta, sizeof(MetaData_Table));
+    updated_meta.entries[target_idx].size = new_size;
 
     uint8_t meta_buf[META_PROGRAM_SIZE];
-
     memset(meta_buf, 0xFF, META_PROGRAM_SIZE);
+    memcpy(meta_buf, &updated_meta, sizeof(MetaData_Table));
 
-    memcpy(meta_buf,
-           &updated_meta,
-           sizeof(MetaData_Table));
-
-    ints = save_and_disable_interrupts();
-
-    flash_range_erase(
-        FS_BASE_OFFSET,
-        FLASH_SECTOR_SIZE
-    );
-
-    flash_range_program(
-        FS_BASE_OFFSET,
-        meta_buf,
-        META_PROGRAM_SIZE
-    );
-
-    restore_interrupts(ints);
+    flash_safe_begin();
+    flash_range_erase(FS_BASE_OFFSET, FLASH_SECTOR_SIZE);
+    flash_range_program(FS_BASE_OFFSET, meta_buf, META_PROGRAM_SIZE);
+    flash_safe_end();
 
     return 0;
 }

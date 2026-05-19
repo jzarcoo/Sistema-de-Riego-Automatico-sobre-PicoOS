@@ -16,9 +16,9 @@
 #define USER_TRIGGER_PIN        16
 
 // Semaforos compartidos entre tareas de usuario
-extern semaphore_t irrigation_pump_sem;
-extern semaphore_t logger_sem;
-extern semaphore_t display_sem;
+extern kernel_semaphore_t irrigation_pump_sem;
+extern kernel_semaphore_t logger_sem;
+extern kernel_semaphore_t display_sem;
 
 // Colas de mensajes compartidas entre tareas de usuario
 extern message_queue_t irrigation_queue;

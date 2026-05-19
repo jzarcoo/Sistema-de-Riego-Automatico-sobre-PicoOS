@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "pico/multicore.h"
 #include "kernel_drivers.h"
 #include "kernel_events.h"
 #include "irrigation_manager.h"
@@ -21,20 +22,13 @@
 #define SYS_SEM_INIT 12
 #define SYS_ADC_INIT 13
 #define SYS_PULLUP 14
-#define SYS_GPIO_IRQ_INIT 15
-#define SYS_MANUAL_TRIGGER_EVENT_INIT 16
+#define SYS_GPIO_IRQ_REGISTER 15
 #define SYS_REQUEST_IRRIGATION 17
 #define SYS_SLEEP 18
 
-/*
- * @brief Kernel service handler for system calls.
- * @param svc_args: Pointer to the user stack frame.
- * @param syscall_id: The value of r7 passed by the assembler
- */
 void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
     switch (syscall_id) {
         case SYS_GPIO_SET:
-            // Set the GPIO value using the kernel function
             k_gpio_set(svc_args[0], svc_args[1]);
             break;
 
@@ -56,18 +50,15 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
         }
 
         case SYS_EXIT:
-            // The task requested to terminate; delegate to the scheduler
             k_task_exit();
             break;
-        
+
         case SYS_SEM_WAIT:
-            // Wait on the semaphore 
-            k_sem_wait((semaphore_t *)svc_args[0]);
+            k_sem_wait((kernel_semaphore_t *)svc_args[0]);
             break;
-        
+
         case SYS_SEM_POST:
-            // Post to the semaphore 
-            k_sem_post((semaphore_t *)svc_args[0]);
+            k_sem_post((kernel_semaphore_t *)svc_args[0]);
             break;
 
         case SYS_PUMP_ON:
@@ -87,7 +78,7 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
             break;
 
         case SYS_SEM_INIT:
-            k_sem_init((semaphore_t *)svc_args[0], svc_args[1]);
+            k_sem_init((kernel_semaphore_t *)svc_args[0], svc_args[1]);
             break;
 
         case SYS_ADC_INIT:
@@ -98,12 +89,8 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
             k_gpio_pullup(svc_args[0]);
             break;
 
-        case SYS_GPIO_IRQ_INIT:
-            k_gpio_irq_init(svc_args[0]);
-            break;
-
-        case SYS_MANUAL_TRIGGER_EVENT_INIT:
-            k_manual_trigger_event_init((message_queue_t *)svc_args[0]);
+        case SYS_GPIO_IRQ_REGISTER:
+            k_gpio_event_register(svc_args[0], (message_queue_t *)svc_args[1], (message_type_t)svc_args[2]);
             break;
 
         case SYS_REQUEST_IRRIGATION:
@@ -115,8 +102,7 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
             break;
 
         default:
-            // Invalid syscall ID, return an error code (e.g., -1)
-            svc_args[0] = -1; 
+            svc_args[0] = -1;
             break;
     }
 }

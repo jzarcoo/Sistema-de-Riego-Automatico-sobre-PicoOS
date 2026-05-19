@@ -36,19 +36,19 @@ int sys_gpio_dir(int pin, int output);
  * @param sem Pointer to the semaphore to initialize.
  * @param valor_inicial Initial value for the semaphore.
  */
-void sys_sem_init(semaphore_t *sem, int valor_inicial);
+void sys_sem_init(kernel_semaphore_t *sem, int valor_inicial);
 
 /**
  * @brief Syscalls interface for semaphore wait operation.
  * @param sem Pointer to the semaphore to wait on.
  */
-void sys_sem_wait(semaphore_t *sem);
+void sys_sem_wait(kernel_semaphore_t *sem);
 
 /**
  * @brief Syscalls interface for semaphore post operation.
  * @param sem Pointer to the semaphore to post.
  */
-void sys_sem_post(semaphore_t *sem);
+void sys_sem_post(kernel_semaphore_t *sem);
 
 /**
  * @brief Syscalls interface to enable internal pull-up resistor on a GPIO pin.
@@ -57,10 +57,13 @@ void sys_sem_post(semaphore_t *sem);
 void sys_gpio_pullup(int pin);
 
 /**
- * @brief Syscalls interface to enable GPIO interrupt handling for a pin.
+ * @brief Registra una interrupcion GPIO. El kernel configura el pin y
+ * despacha msg_type a la cola cuando ocurre un falling edge.
  * @param pin GPIO pin number
+ * @param queue Cola donde se enviara el mensaje
+ * @param msg_type Tipo de mensaje a enviar
  */
-void sys_gpio_irq_init(int pin);
+void sys_gpio_irq_register(int pin, message_queue_t *queue, message_type_t msg_type);
 
 /**
  * @brief Syscalls interface to initialize the ADC for soil moisture sensor.
@@ -72,8 +75,6 @@ void sys_adc_init(void);
  * @return Sensor value 
  */
 int sys_read_soil_sensor(void);
-
-void sys_manual_trigger_event_init(message_queue_t *queue);
 
 void sys_pump_on(void);
 void sys_pump_off(void);

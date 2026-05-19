@@ -17,8 +17,7 @@
 .equ SYS_SEM_INIT,     12
 .equ SYS_ADC_INIT,     13
 .equ SYS_PULLUP,       14
-.equ SYS_GPIO_IRQ_INIT, 15
-.equ SYS_MANUAL_TRIGGER_EVENT_INIT, 16
+.equ SYS_GPIO_IRQ_REGISTER, 15
 .equ SYS_REQUEST_IRRIGATION, 17
 .equ SYS_SLEEP, 18
 
@@ -71,7 +70,7 @@ sys_exit:
     mov r7, r12         @ Restore r7
     bx lr               @ Return (though we wont actually return)
 
-@ --- Function: void sys_sem_wait(semaphore_t *sem) ---
+@ --- Function: void sys_sem_wait(kernel_semaphore_t *sem) ---
 .global sys_sem_wait
 .type sys_sem_wait, %function
 sys_sem_wait:
@@ -82,7 +81,7 @@ sys_sem_wait:
     mov r7, r12             @ Restore r7
     bx lr                   @ Return
 
-@ --- Function: void sys_sem_post(semaphore_t *sem) ---
+@ --- Function: void sys_sem_post(kernel_semaphore_t *sem) ---
 .global sys_sem_post
 .type sys_sem_post, %function
 sys_sem_post:
@@ -125,12 +124,13 @@ sys_read_soil_sensor:
     mov r7, r12
     bx lr
 
-@ --- Function: void sys_manual_trigger_event_init(message_queue_t *queue) ---
-.global sys_manual_trigger_event_init
-.type sys_manual_trigger_event_init, %function
-sys_manual_trigger_event_init:
+@ --- Function: void sys_gpio_irq_register(int pin, message_queue_t *queue, int msg_type) ---
+.global sys_gpio_irq_register
+.type sys_gpio_irq_register, %function
+sys_gpio_irq_register:
+    @ r0: pin, r1: queue pointer, r2: message type
     mov r12, r7
-    movs r7, #SYS_MANUAL_TRIGGER_EVENT_INIT
+    movs r7, #SYS_GPIO_IRQ_REGISTER
     svc #0
     mov r7, r12
     bx lr
@@ -157,7 +157,7 @@ sys_heartbeat:
     mov r7, r12
     bx lr
 
-@ --- Function: void sys_sem_init(semaphore_t *sem, int value) ---
+@ --- Function: void sys_sem_init(kernel_semaphore_t *sem, int value) ---
 .global sys_sem_init
 .type sys_sem_init, %function
 sys_sem_init:
@@ -196,16 +196,6 @@ sys_gpio_pullup:
     mov r7, r12
     bx lr
 
-@ --- Function: void sys_gpio_irq_init(int pin) ---
-.global sys_gpio_irq_init
-.type sys_gpio_irq_init, %function
-sys_gpio_irq_init:
-    @ r0: pin number
-    mov r12, r7
-    movs r7, #SYS_GPIO_IRQ_INIT
-    svc #0
-    mov r7, r12
-    bx lr
 
 @ --- Function: void sys_request_irrigation(void) ---
 .global sys_request_irrigation

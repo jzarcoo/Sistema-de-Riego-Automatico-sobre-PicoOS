@@ -1,151 +1,129 @@
 #include "scheduler.h"
 #include <stdio.h>
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
 
-tcb_t tasks[MAX_TASKS];
-int current_task = -1;
-volatile uint32_t kernel_ticks = 0;
+core_scheduler_t core_schedulers[2];
 
-/**
- * @brief Initialize the task stack so it looks like an interrupted context.
- * @param id Task index in the task table.
- */
-void init_task_stack(int id) {
-    uint32_t *stack_top = tasks[id].stack + STACK_SIZE;
-    
-    // Hardware stack frame (simulated)
-    *(--stack_top) = 0x01000000; // xPSR (Thumb bit enabled)
-    *(--stack_top) = (uint32_t)tasks[id].entry_point; // PC (Program Counter)
-    *(--stack_top) = 0xFFFFFFFD; // LR (Return to Thread mode using PSP)
+static void init_task_stack(int core_id, int id) {
+    tcb_t *t = &core_schedulers[core_id].tasks[id];
+    uint32_t *stack_top = t->stack + STACK_SIZE;
+
+    *(--stack_top) = 0x01000000;
+    *(--stack_top) = (uint32_t)t->entry_point;
+    *(--stack_top) = 0xFFFFFFFD;
     *(--stack_top) = 0; // R12
     *(--stack_top) = 0; // R3
     *(--stack_top) = 0; // R2
     *(--stack_top) = 0; // R1
     *(--stack_top) = 0; // R0
 
-    // Software stack frame (simulated, R4-R11)
     for (int i = 0; i < 8; i++) {
         *(--stack_top) = 0;
     }
-    
-    tasks[id].sp = stack_top;
-    tasks[id].state = READY;
+
+    t->sp = stack_top;
+    t->state = READY;
 }
 
-/**
- * @brief Register a task in the system without enqueuing it yet.
- * @param id Task index in the task table.
- * @param entry_point Task entry function.
- */
-void task_create(int id, void (*entry_point)(void)) {
-    if (id >= 0 && id < MAX_TASKS) {
-        tasks[id].entry_point = entry_point;
-        tasks[id].state = READY;
-        tasks[id].quantum = 10; 
-        tasks[id].remaining_ticks = 10;
-        tasks[id].heartbeat = 1;
-        tasks[id].last_seen = kernel_ticks;
-        init_task_stack(id);
+void task_create_on_core(int core_id, int id, void (*entry_point)(void)) {
+    if (id >= 0 && id < MAX_TASKS_PER_CORE) {
+        core_scheduler_t *sched = &core_schedulers[core_id];
+        sched->tasks[id].entry_point = entry_point;
+        sched->tasks[id].state = READY;
+        sched->tasks[id].quantum = 10;
+        sched->tasks[id].remaining_ticks = 10;
+        sched->tasks[id].heartbeat = 1;
+        sched->tasks[id].last_seen = sched->kernel_ticks;
+        init_task_stack(core_id, id);
+        if (id >= sched->num_tasks)
+            sched->num_tasks = id + 1;
     }
 }
 
-/**
- * @brief SysTick handler called automatically by the hardware.
- */
 void isr_systick() {
-    kernel_ticks++;
+    int core_id = get_core_num();
+    core_scheduler_t *sched = &core_schedulers[core_id];
 
-    for (int i = 0; i < MAX_TASKS; i++) {
-        if (tasks[i].state == DORMANT)
+    sched->kernel_ticks++;
+
+    for (int i = 0; i < sched->num_tasks; i++) {
+        if (sched->tasks[i].state == DORMANT)
             continue;
 
-        // Despertar tareas dormidas y renovar heartbeat automaticamente
-        if (tasks[i].state == BLOCKED && tasks[i].wake_tick != 0) {
-            tasks[i].last_seen = kernel_ticks;
-            if (kernel_ticks >= tasks[i].wake_tick) {
-                tasks[i].wake_tick = 0;
-                tasks[i].state = READY;
+        if (sched->tasks[i].state == BLOCKED && sched->tasks[i].wake_tick != 0) {
+            sched->tasks[i].last_seen = sched->kernel_ticks;
+            if (sched->kernel_ticks >= sched->tasks[i].wake_tick) {
+                sched->tasks[i].wake_tick = 0;
+                sched->tasks[i].state = READY;
             }
             continue;
         }
 
-        // Watchdog: matar tareas que no responden
-        if ((kernel_ticks - tasks[i].last_seen) > TASK_TIMEOUT_TICKS) {
-            printf("[WATCHDOG] Tarea %d no responde, reiniciando...\n", i + 1);
-            task_create(i, tasks[i].entry_point);
-            printf("[WATCHDOG] Tarea %d reiniciada.\n", i + 1);
+        if ((sched->kernel_ticks - sched->tasks[i].last_seen) > TASK_TIMEOUT_TICKS) {
+            task_create_on_core(core_id, i, sched->tasks[i].entry_point);
         }
     }
 
-    if (current_task != -1) {
-        if (--tasks[current_task].remaining_ticks > 0) {
-            return; 
+    if (sched->current_task != -1) {
+        if (--sched->tasks[sched->current_task].remaining_ticks > 0) {
+            return;
         }
-        tasks[current_task].remaining_ticks = tasks[current_task].quantum;
+        sched->tasks[sched->current_task].remaining_ticks = sched->tasks[sched->current_task].quantum;
     }
 
-    // Trigger PendSV to perform the context switch
-    // Write to the Interrupt Control and State Register (ICSR)
     *(volatile uint32_t *)0xE000ED04 = (1 << 28);
 }
 
-/**
- * @brief Handle the EXIT syscall by terminating the current task.
- */
 void k_task_exit(void) {
-    if (current_task != -1) {
-        tasks[current_task].state = DORMANT;
-        printf("Tarea %d terminada.\n", current_task + 1);
-        // Force an immediate context switch
+    int core_id = get_core_num();
+    core_scheduler_t *sched = &core_schedulers[core_id];
+    if (sched->current_task != -1) {
+        sched->tasks[sched->current_task].state = DORMANT;
         *(volatile uint32_t *)0xE000ED04 = (1 << 28);
     }
 }
 
-/**
- * @brief Pick the next runnable task using Round Robin.
- * @param current_sp Stack pointer of the task being switched out.
- * @return Stack pointer of the selected task, or current_sp if none is ready.
- */
 uint32_t schedule(uint32_t current_sp) {
-    // Save the SP of the task that was just paused
-    if (current_task != -1) {
-        tasks[current_task].sp = (uint32_t *)current_sp;
-        if (tasks[current_task].state == RUNNING) {
-            tasks[current_task].state = READY;
+    int core_id = get_core_num();
+    core_scheduler_t *sched = &core_schedulers[core_id];
+
+    if (sched->current_task != -1) {
+        sched->tasks[sched->current_task].sp = (uint32_t *)current_sp;
+        if (sched->tasks[sched->current_task].state == RUNNING) {
+            sched->tasks[sched->current_task].state = READY;
         }
     }
 
-    // Round Robin algorithm
-    int next_task = current_task;
+    int next_task = sched->current_task;
     int tries = 0;
 
     do {
-        next_task = (next_task + 1) % MAX_TASKS;
+        next_task = (next_task + 1) % sched->num_tasks;
         tries++;
-        // If we find a ready task, stop searching
-        if (tasks[next_task].state == READY) {
+        if (sched->tasks[next_task].state == READY) {
             break;
         }
-    } while (tries < MAX_TASKS);
+    } while (tries < sched->num_tasks);
 
-    // If a runnable task was found
-    if (tasks[next_task].state == READY) {
-        current_task = next_task;
-        tasks[current_task].state = RUNNING;
-        tasks[current_task].remaining_ticks = tasks[current_task].quantum;
-        return (uint32_t)tasks[current_task].sp;
+    if (sched->tasks[next_task].state == READY) {
+        sched->current_task = next_task;
+        sched->tasks[sched->current_task].state = RUNNING;
+        sched->tasks[sched->current_task].remaining_ticks = sched->tasks[sched->current_task].quantum;
+        return (uint32_t)sched->tasks[sched->current_task].sp;
     }
 
-    // If no task is ready, keep the current context
-    return current_sp; 
+    return current_sp;
 }
 
 void k_task_sleep(uint32_t ms) {
-    if (current_task < 0) return;
-    uint32_t ticks = ms / 10;
-    if (ticks == 0) ticks = 1;
-    tasks[current_task].wake_tick = kernel_ticks + ticks;
-    tasks[current_task].state = BLOCKED;
+    int core_id = get_core_num();
+    core_scheduler_t *sched = &core_schedulers[core_id];
+    if (sched->current_task < 0) return;
+    uint32_t ticks_to_sleep = ms / 10;
+    if (ticks_to_sleep == 0) ticks_to_sleep = 1;
+    sched->tasks[sched->current_task].wake_tick = sched->kernel_ticks + ticks_to_sleep;
+    sched->tasks[sched->current_task].state = BLOCKED;
     *(volatile uint32_t *)0xE000ED04 = (1 << 28);
 }
 

@@ -1,23 +1,23 @@
 #include <stdio.h>
 #include <stdint.h>
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
 #include "hardware/exception.h"
+#include "hardware/gpio.h"
 
 #include "scheduler.h"
+#include "syscalls.h"
+#include "kernel_drivers.h"
+#include "kernel_events.h"
 #include "irrigation_manager.h"
+#include "user_app.h"
+#include "message_queue.h"
 
-// Prototipos de las tareas de usuario (definidas en src/user/tasks/)
 extern void irrigation_task(void);
 extern void sensor_task(void);
 extern void trigger_task(void);
 extern void logger_task(void);
 extern void display_task(void);
-
-#define IRRIGATION_TASK_ID  0
-#define SENSOR_TASK_ID      1
-#define TRIGGER_TASK_ID     2
-#define LOGGER_TASK_ID      3
-#define DISPLAY_TASK_ID     4
 
 #define SYSTICK_BASE     0xE000E000
 #define SYSTICK_CTRL (*(volatile uint32_t *)(SYSTICK_BASE + 0x10))
@@ -31,52 +31,28 @@ extern void display_task(void);
 #define MPU_RBAR   (*(volatile uint32_t*)0xE000ED9C)
 #define MPU_RASR   (*(volatile uint32_t*)0xE000EDA0)
 
-// Registrar los manejadores de Excepciones del Sistema Operativo
-// SVC (ID 11) maneja las Syscalls solicitadas por las tareas
 #define EXCEPTION_SVC     11
 #define EXCEPTION_PENDSV  14
-// HardFault (ID 3) maneja errores críticos del sistema
 #define EXCEPTION_HARDFAULT  3
 
 extern void wrapper_svc(void);
 extern void isr_pendsv(void);
 
-extern volatile uint32_t kernel_ticks;
-
-// Contador de hard faults 
 volatile uint32_t fault_count = 0;
-// Última dirección de programa que causó un hard fault
 volatile uint32_t last_fault_pc = 0;
 
-/**
- * @brief Configura e inicializa el timer SysTick para generar interrupciones periódicas.
- * @param ticks Número de ciclos del reloj para generar una interrupción (ej. 1250000 para 10ms con un reloj de 125MHz).
- */
-void systick_init(__uint32_t ticks) {
+void systick_init(uint32_t ticks) {
     SYSTICK_LOAD = ticks - 1;
-    SYSTICK_VAL = 0;          
-    SYSTICK_CTRL = 0x07;      
-}
-
-/**
- * @brief Registra un incidente de hard fault.
- * @param fault_pc Dirección de programa donde ocurrió el hard fault.
- */
-void log_incident(uint32_t fault_pc) {
-    fault_count++;
-    last_fault_pc = fault_pc;
-    uint32_t timestamp = kernel_ticks; 
-    printf("\n[!] =============================================\n");
-    printf("[HARD FAULT] Ocurrió un hard fault en la dirección 0x%08X\n", fault_pc);
-    printf("[HARD FAULT] Contador de fallos: %u\n", fault_count);
-    printf("[HARD FAULT] Timestamp: %u\n", timestamp);
-    printf("\n[!] =============================================\n");
+    SYSTICK_VAL = 0;
+    SYSTICK_CTRL = 0x07;
 }
 
 void HardFault_Handler_C(uint32_t *stack_frame) {
-    log_incident(stack_frame[6]);
-    tasks[current_task].state = DORMANT;
-    printf("[MPU] Tarea %d terminada por acceso ilegal.\n", current_task + 1);
+    int core_id = get_core_num();
+    core_scheduler_t *sched = &core_schedulers[core_id];
+    fault_count++;
+    last_fault_pc = stack_frame[6];
+    sched->tasks[sched->current_task].state = DORMANT;
     *(volatile uint32_t *)0xE000ED04 = (1 << 28);
 }
 
@@ -94,70 +70,174 @@ void __attribute__((naked)) HardFault_Handler(void) {
         "b HardFault_Handler_C \n"
     );
 }
+void irrigation_task_update(void)
+{
+    while (1)
+    {
+        sys_heartbeat();
+        irrigation_manager_update();
 
-void mpu_protect_peripherials(void) {
-    MPU_RNR = 1;                              
-    MPU_RBAR = 0x40000000; // Perifericos: GPIO, UART, ADC, etc.
-    MPU_RASR = (1 << 28) | // no codigo
-               (1<<24) |   // Kernel puede leer/escribir. Tareas de usuario causarán HardFault
-               (1<< 18) | // sharable bit
-               (28 << 1) |        // Protegemos 512MB desde la base
-               (1 << 0);             // Activamos esta regla
-               
-               
-    MPU_RNR = 2;                          
-    MPU_RBAR = 0xD0000000; // SIO
-    MPU_RASR = (1 << 28) |                       
-               (1<<24) |   // Solo Kernel puede tocar los GPIOs rápidos
-               (1<< 18) |            
-               (27 << 1) |        // Protegemos 256MB
-               (1 << 0);            
+
+    }
 }
 
 void mpu_init(void) {
-    __asm volatile("dmb"); // Data Memory Barrier
-    
-    MPU_CTRL = 0; // Deshabilitar MPU para configurar
+    __asm volatile("dmb");
 
-    mpu_protect_peripherials();
+    MPU_CTRL = 0;
 
-    // Permite que el código privilegiado use el mapa de memoria por defecto en direcciones no cubiertas por regiones MPU.
-    MPU_CTRL = (1 << 0) | (1 << 2); 
+    // Region 0: Flash (0x10000000, 16MB) — Full access, ejecutable
+    MPU_RNR = 0;
+    MPU_RBAR = 0x10000000;
+    MPU_RASR = (3 << 24) |   // AP=011: Full access
+               (23 << 1) |   // SIZE=23 → 16MB
+               (1 << 0);
 
-    __asm volatile("dsb"); // Data Synchronization Barrier
-    __asm volatile("isb"); // Instruction Synchronization Barrier
+    // Region 1: RAM (0x20000000, 256KB) — Full access, no ejecutable
+    MPU_RNR = 1;
+    MPU_RBAR = 0x20000000;
+    MPU_RASR = (1 << 28) |   // XN
+               (3 << 24) |   // AP=011: Full access
+               (1 << 18) |   // Shareable
+               (17 << 1) |   // SIZE=17 → 256KB
+               (1 << 0);
+
+    // Region 2: Perifericos (0x40000000, 512MB) — Accesible por user
+    // Abierto para que el SDK funcione (TIMER, UART, USB, DMA, etc.)
+    MPU_RNR = 2;
+    MPU_RBAR = 0x40000000;
+    MPU_RASR = (1 << 28) |   // XN
+               (3 << 24) |   // AP=011: Full access
+               (1 << 18) |
+               (28 << 1) |   // 512MB
+               (1 << 0);
+
+    // Region 3: SIO (0xD0000000, 256MB) — Accesible por user
+    // Spinlocks del SDK y get_core_num()
+    MPU_RNR = 3;
+    MPU_RBAR = 0xD0000000;
+    MPU_RASR = (1 << 28) |   // XN
+               (3 << 24) |   // AP=011: Full access
+               (1 << 18) |
+               (27 << 1) |   // 256MB
+               (1 << 0);
+
+    // Region 4: IO_BANK0 (0x40014000, 16KB) — Solo kernel
+    // Protege registros GPIO (pin de la bomba). User → HardFault.
+    MPU_RNR = 4;
+    MPU_RBAR = 0x40014000;
+    MPU_RASR = (1 << 28) |   // XN
+               (1 << 24) |   // AP=001: Solo privilegiado
+               (1 << 18) |
+               (13 << 1) |   // SIZE=13 → 16KB
+               (1 << 0);
+
+    // Region 5: PADS_BANK0 (0x4001C000, 4KB) — Solo kernel
+    MPU_RNR = 5;
+    MPU_RBAR = 0x4001C000;
+    MPU_RASR = (1 << 28) |   // XN
+               (1 << 24) |   // AP=001: Solo privilegiado
+               (1 << 18) |
+               (11 << 1) |   // SIZE=11 → 4KB
+               (1 << 0);
+
+    MPU_CTRL = 0; // MPU configurada pero NO activada (para debug)
+
+    __asm volatile("dsb");
+    __asm volatile("isb");
 }
 
+// ============================================================
+// CORE 1: Monitoreo y control critico
+// Tareas: sensor_task, irrigation_task, trigger_task
+// ============================================================
+void core1_entry(void) {
+    // 
+    multicore_lockout_victim_init();
 
-int main() {
-    stdio_init_all();
-    // Espera a que se establezca la conexión USB antes de continuar con la ejecución del sistema.
-    while (!stdio_usb_connected()) {
-        printf("Esperando conexion USB...\n");
-        sleep_ms(100);
-    }
-    printf("Conexion USB establecida.\n");
 
     exception_set_exclusive_handler((enum exception_number)EXCEPTION_SVC, wrapper_svc);
     exception_set_exclusive_handler((enum exception_number)EXCEPTION_PENDSV, isr_pendsv);
-    exception_set_exclusive_handler((enum exception_number)EXCEPTION_HARDFAULT, HardFault_Handler); 
+    exception_set_exclusive_handler((enum exception_number)EXCEPTION_HARDFAULT, HardFault_Handler);
 
+    core_schedulers[1].current_task = -1;
+    core_schedulers[1].num_tasks = 0;
+
+    // GPIO driver: configurar pin 14 como input con pull-down
+    // (antes de MPU porque accede registros de IO_BANK0 directamente)
+    gpio_init(14);
+    gpio_set_dir(14, GPIO_IN);
+    gpio_pull_down(14);
+
+    // Event system: registrar IRQ rising edge → encolar MSG_MANUAL_TRIGGER
+    k_gpio_event_system_init();
+    k_gpio_event_register(14, GPIO_IRQ_EDGE_RISE, &irrigation_queue, MSG_MANUAL_TRIGGER);
+
+    // MPU se activa DESPUÉS de configurar hardware
     mpu_init();
 
-    // Kernel registra las tareas de usuario en el scheduler
-    task_create(IRRIGATION_TASK_ID, irrigation_task);
-    task_create(SENSOR_TASK_ID, sensor_task);
-    task_create(TRIGGER_TASK_ID, trigger_task);
-    task_create(LOGGER_TASK_ID, logger_task);
-    task_create(DISPLAY_TASK_ID, display_task);
+    task_create_on_core(1, 0, irrigation_task);
+    task_create_on_core(1, 1, sensor_task);
+    task_create_on_core(1, 2, trigger_task);
+    task_create_on_core(1, 3, irrigation_task_update);
+
+    printf("[CORE1] Iniciado - Monitoreo y control critico\n");
 
     __asm volatile ("msr psp, %0" : : "r" (0));
 
     systick_init(1250000);
 
     while (1) {
-        irrigation_manager_update();
+        //irrigation_manager_update();
         __asm volatile ("wfi");
     }
 }
 
+// ============================================================
+// CORE 0: Planificador, UI y logs
+// Tareas: logger_task, display_task
+// ============================================================
+int main() {
+    stdio_init_all();
+    // Esperar usb 
+    while (!stdio_usb_connected()) {
+        sleep_ms(100);
+    }
+    sleep_ms(500);
+    printf("Conexion USB establecida.\n");
+
+    // Inicializar schedulers antes de todo
+    core_schedulers[0].current_task = -1;
+    core_schedulers[0].num_tasks = 0;
+    core_schedulers[1].current_task = -1;
+    core_schedulers[1].num_tasks = 0;
+
+    // Inicializar handlers de excepciones
+    exception_set_exclusive_handler((enum exception_number)EXCEPTION_SVC, wrapper_svc);
+    exception_set_exclusive_handler((enum exception_number)EXCEPTION_PENDSV, isr_pendsv);
+    exception_set_exclusive_handler((enum exception_number)EXCEPTION_HARDFAULT, HardFault_Handler);
+
+    // tareas del core0
+    task_create_on_core(0, 0, logger_task);
+    task_create_on_core(0, 1, display_task);
+
+    mq_init(&irrigation_queue);
+
+    printf("[CORE0] Iniciado - Planificador, UI y logs\n");
+
+    multicore_launch_core1(core1_entry);
+    sleep_ms(100);
+
+    printf("[CORE0] Core1 lanzado. Iniciando scheduler...\n");
+
+    // MPU se activa justo antes del scheduler, despues de toda la inicializacion
+    mpu_init();
+
+    __asm volatile ("msr psp, %0" : : "r" (0));
+
+    systick_init(1250000);
+
+    while (1) {
+        __asm volatile ("wfi");
+    }
+}

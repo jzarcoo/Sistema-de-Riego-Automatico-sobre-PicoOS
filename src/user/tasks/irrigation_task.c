@@ -36,6 +36,7 @@ static void perform_irrigation(void) {
  * @brief Tarea de riego.
  */
 void irrigation_task(void) {
+    printf("[Irrigation Task] Iniciada.\n");
     setup_irrigation();
 
     message_t msg;
