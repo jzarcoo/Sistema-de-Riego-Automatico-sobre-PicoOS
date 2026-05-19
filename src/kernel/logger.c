@@ -24,7 +24,7 @@ void logger_init(void) {
  * Nota: Asegúrate de que el evento no exceda el tamaño máximo permitido por fs_write_append 
  */
 void logger_write(const char* event) {
-    printf("[LOGGER WRITE] %s\n", event);
+    printf("[FLASH] %s\n", event);
     // fs_write_append(LOG_FILE_NAME,
     //                 (const uint8_t*)event,
     //                 strlen(event));
