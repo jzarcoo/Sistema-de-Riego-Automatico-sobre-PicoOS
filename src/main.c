@@ -87,46 +87,29 @@ void mpu_init(void) {
 
     MPU_CTRL = 0;
 
-    // FLASH, ROM
+    // Region 0: Todo el espacio de memoria (4GB) — Full access
+    // Permite acceso a ROM, Flash, RAM, perifericos, SIO
     MPU_RNR = 0;
     MPU_RBAR = 0x00000000;
-    MPU_RASR =
-        (3 << 24) |
-        (28 << 1) |
-        (1 << 0);
+    MPU_RASR = (3 << 24) |   // AP=011: Full access
+               (31 << 1) |   // SIZE=31 → 4GB
+               (1 << 0);
 
-    // RAM
+    // Region 1: IO_BANK0 (0x40014000, 16KB) — Solo kernel
+    // Protege registros GPIO (pin de la bomba). User → HardFault.
     MPU_RNR = 1;
-    MPU_RBAR = 0x20000000;
-    MPU_RASR =
-        (3 << 24) |
-        (17 << 1) |
-        (1 << 0);
-
-    //  perifericos abiertos
-    MPU_RNR = 2;
-    MPU_RBAR = 0x40000000;
-    MPU_RASR =
-        (3 << 24) |
-        (28 << 1) |
-        (1 << 0);
-
-    // GPIO protegido
-    // IO_BANK0
-    MPU_RNR = 3;
     MPU_RBAR = 0x40014000;
-    MPU_RASR =
-        (1 << 28) |   // XN
-        (1 << 24) |   // privileged only
-        (13 << 1) |   
-        (1 << 0);
+    MPU_RASR = (1 << 28) |   // XN
+               (1 << 24) |   // AP=001: Solo privilegiado
+               (13 << 1) |   // SIZE=13 → 16KB
+               (1 << 0);
 
-    // Region 5: PADS_BANK0 (0x4001C000, 4KB) — Solo kernel
-    MPU_RNR = 5;
+    // Region 2: PADS_BANK0 (0x4001C000, 4KB) — Solo kernel
+    // Protege configuracion electrica de pines.
+    MPU_RNR = 2;
     MPU_RBAR = 0x4001C000;
     MPU_RASR = (1 << 28) |   // XN
                (1 << 24) |   // AP=001: Solo privilegiado
-               (1 << 18) |
                (11 << 1) |   // SIZE=11 → 4KB
                (1 << 0);
 
