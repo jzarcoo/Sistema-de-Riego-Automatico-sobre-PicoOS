@@ -7,11 +7,13 @@
 void sensor_task(void) {
     message_t msg;
     int umbral = 2500;
+    char buf[40];
     while (1) {
         sys_heartbeat();
         int sensor_state = sys_read_soil_sensor();
 
-        printf("Sensor de humedad: %d\n", sensor_state);
+        snprintf(buf, sizeof(buf), "Sensor de humedad: %d\n", sensor_state);
+        sys_print(buf);
 
         if (sensor_state > umbral) {
             msg.type = MSG_SOIL_DRY;

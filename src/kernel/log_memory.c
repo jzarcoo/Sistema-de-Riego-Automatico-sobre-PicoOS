@@ -71,7 +71,7 @@ void log_cache_write(const char* msg) {
      * Simulated page fault.
      */
     if (frame == -1) {
-        printf("[PAGE FAULT] No hay frames libres.\n");
+        printf("[Cache evict] No hay frames libres.\n");
         frame = evict_lru();
     }
     strncpy(frames[frame].data, msg, 63);

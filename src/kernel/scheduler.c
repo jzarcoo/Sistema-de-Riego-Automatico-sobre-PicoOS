@@ -110,6 +110,24 @@ uint32_t schedule(uint32_t current_sp) {
         sched->current_task = next_task;
         sched->tasks[sched->current_task].state = RUNNING;
         sched->tasks[sched->current_task].remaining_ticks = sched->tasks[sched->current_task].quantum;
+
+        uint32_t control;
+
+        __asm volatile (
+            "mrs %0, control"
+            : "=r" (control)
+        );
+
+        control |= 0x2;
+
+        __asm volatile (
+            "msr control, %0"
+            :
+            : "r" (control)
+        );
+
+        __asm volatile ("isb");
+
         return (uint32_t)sched->tasks[sched->current_task].sp;
     }
 

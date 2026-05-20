@@ -81,56 +81,45 @@ void irrigation_task_update(void)
     }
 }
 
+
 void mpu_init(void) {
     __asm volatile("dmb");
 
     MPU_CTRL = 0;
 
-    // Region 0: Flash (0x10000000, 16MB) — Full access, ejecutable
+    // FLASH, ROM
     MPU_RNR = 0;
-    MPU_RBAR = 0x10000000;
-    MPU_RASR = (3 << 24) |   // AP=011: Full access
-               (23 << 1) |   // SIZE=23 → 16MB
-               (1 << 0);
+    MPU_RBAR = 0x00000000;
+    MPU_RASR =
+        (3 << 24) |
+        (28 << 1) |
+        (1 << 0);
 
-    // Region 1: RAM (0x20000000, 256KB) — Full access, no ejecutable
+    // RAM
     MPU_RNR = 1;
     MPU_RBAR = 0x20000000;
-    MPU_RASR = (1 << 28) |   // XN
-               (3 << 24) |   // AP=011: Full access
-               (1 << 18) |   // Shareable
-               (17 << 1) |   // SIZE=17 → 256KB
-               (1 << 0);
+    MPU_RASR =
+        (3 << 24) |
+        (17 << 1) |
+        (1 << 0);
 
-    // Region 2: Perifericos (0x40000000, 512MB) — Accesible por user
-    // Abierto para que el SDK funcione (TIMER, UART, USB, DMA, etc.)
+    //  perifericos abiertos
     MPU_RNR = 2;
     MPU_RBAR = 0x40000000;
-    MPU_RASR = (1 << 28) |   // XN
-               (3 << 24) |   // AP=011: Full access
-               (1 << 18) |
-               (28 << 1) |   // 512MB
-               (1 << 0);
+    MPU_RASR =
+        (3 << 24) |
+        (28 << 1) |
+        (1 << 0);
 
-    // Region 3: SIO (0xD0000000, 256MB) — Accesible por user
-    // Spinlocks del SDK y get_core_num()
+    // GPIO protegido
+    // IO_BANK0
     MPU_RNR = 3;
-    MPU_RBAR = 0xD0000000;
-    MPU_RASR = (1 << 28) |   // XN
-               (3 << 24) |   // AP=011: Full access
-               (1 << 18) |
-               (27 << 1) |   // 256MB
-               (1 << 0);
-
-    // Region 4: IO_BANK0 (0x40014000, 16KB) — Solo kernel
-    // Protege registros GPIO (pin de la bomba). User → HardFault.
-    MPU_RNR = 4;
     MPU_RBAR = 0x40014000;
-    MPU_RASR = (1 << 28) |   // XN
-               (1 << 24) |   // AP=001: Solo privilegiado
-               (1 << 18) |
-               (13 << 1) |   // SIZE=13 → 16KB
-               (1 << 0);
+    MPU_RASR =
+        (1 << 28) |   // XN
+        (1 << 24) |   // privileged only
+        (13 << 1) |   
+        (1 << 0);
 
     // Region 5: PADS_BANK0 (0x4001C000, 4KB) — Solo kernel
     MPU_RNR = 5;
@@ -141,7 +130,7 @@ void mpu_init(void) {
                (11 << 1) |   // SIZE=11 → 4KB
                (1 << 0);
 
-    MPU_CTRL = 0; // MPU configurada pero NO activada (para debug)
+    MPU_CTRL = (1 << 0) | (1 << 2);  // MPU activa + PRIVDEFENA
 
     __asm volatile("dsb");
     __asm volatile("isb");

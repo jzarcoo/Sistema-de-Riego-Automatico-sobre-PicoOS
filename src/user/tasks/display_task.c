@@ -1,5 +1,5 @@
 #include <stdio.h>
-
+#include "hardware/gpio.h"
 #include "user_app.h"
 #include "message_queue.h"
 #include "syscalls.h"
@@ -10,11 +10,15 @@
 void display_task(void) {
     message_t disp_msg;
     while (1) {
+
+        gpio_put(15, 1);
         sys_heartbeat();
         if (mq_receive(&display_queue, &disp_msg) == 0) {
             if (disp_msg.type == MSG_DISPLAY_TEXT) {
                 sys_sem_wait(&display_sem);
-                printf("[OLED DISP] %s\n", disp_msg.text);
+                char buf[48];
+                snprintf(buf, sizeof(buf), "[OLED DISP] %s\n", disp_msg.text);
+                sys_print(buf);
                 sys_sem_post(&display_sem);
             }
         }

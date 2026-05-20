@@ -20,6 +20,7 @@
 .equ SYS_GPIO_IRQ_REGISTER, 15
 .equ SYS_REQUEST_IRRIGATION, 17
 .equ SYS_SLEEP, 18
+.equ SYS_PRINT, 19
 
 @ --- Function: void sys_gpio_dir(int pin, int out) ---
 .global sys_gpio_dir
@@ -214,6 +215,17 @@ sys_sleep:
     @ r0: milliseconds to sleep
     mov r12, r7
     movs r7, #SYS_SLEEP
+    svc #0
+    mov r7, r12
+    bx lr
+
+@ --- Function: void sys_print(const char* str) ---
+.global sys_print
+.type sys_print, %function
+sys_print:
+    @ r0: pointer to string
+    mov r12, r7
+    movs r7, #SYS_PRINT
     svc #0
     mov r7, r12
     bx lr

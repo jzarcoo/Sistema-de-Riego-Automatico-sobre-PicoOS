@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdio.h>
 #include "pico/multicore.h"
 #include "kernel_drivers.h"
 #include "kernel_events.h"
@@ -25,6 +26,7 @@
 #define SYS_GPIO_IRQ_REGISTER 15
 #define SYS_REQUEST_IRRIGATION 17
 #define SYS_SLEEP 18
+#define SYS_PRINT 19
 
 void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
     switch (syscall_id) {
@@ -90,7 +92,13 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
             break;
 
         case SYS_GPIO_IRQ_REGISTER:
-            k_gpio_event_register(svc_args[0], (message_queue_t *)svc_args[1], (message_type_t)svc_args[2]);
+            k_gpio_event_register(
+                svc_args[0],
+                svc_args[1],
+                (message_queue_t *)svc_args[2],
+                (message_type_t)svc_args[3]
+            );
+            
             break;
 
         case SYS_REQUEST_IRRIGATION:
@@ -99,6 +107,10 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
 
         case SYS_SLEEP:
             k_task_sleep(svc_args[0]);
+            break;
+
+        case SYS_PRINT:
+            printf("%s", (const char *)svc_args[0]);
             break;
 
         default:

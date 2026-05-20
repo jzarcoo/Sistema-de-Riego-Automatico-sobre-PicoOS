@@ -89,4 +89,6 @@ void sys_sleep(uint32_t ms);
 
 void sys_exit(void);
 
+void sys_print(const char* str);
+
 #endif
