@@ -1,7 +1,7 @@
 #ifndef KERNEL_HW_CONFIG_H
 #define KERNEL_HW_CONFIG_H
 
-#define IRRIGATION_PUMP_PIN      17
+#define IRRIGATION_PUMP_PIN      6
 #define SOIL_SENSOR_ADC_INPUT    0
 #define BUTTON_PIN               16
 

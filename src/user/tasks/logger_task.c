@@ -27,9 +27,9 @@ void logger_task(void) {
                 log_cache_write(log_msg.text);
                 flush_counter++;
                 //logger_write(log_msg.text);
-                char buf[64];
-                snprintf(buf, sizeof(buf), "[LOG %d] %s\n", flush_counter, log_msg.text);
-                sys_print(buf);
+                //char buf[64];
+                //snprintf(buf, sizeof(buf), "[LOG %d] %s\n", flush_counter, log_msg.text);
+//                sys_print(buf);
                 sys_sem_post(&logger_sem);
             }
         }
@@ -41,7 +41,7 @@ void logger_task(void) {
         if (flush_counter >= 10) {
             sys_sem_wait(&logger_sem);
             log_flush_all();
-            sys_print("[LOG] Cache flushed to Flash\n");
+            //sys_print("[LOG] Cache flushed to Flash\n");
             sys_sem_post(&logger_sem);
             flush_counter = 0;
         }

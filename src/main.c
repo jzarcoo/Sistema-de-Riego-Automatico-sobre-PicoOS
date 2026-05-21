@@ -47,13 +47,25 @@ void systick_init(uint32_t ticks) {
     SYSTICK_CTRL = 0x07;
 }
 
+void __attribute__((naked)) secure_waitt(void) {
+    while (1) {
+        __asm volatile("wfi"); 
+    }
+}
+
 void HardFault_Handler_C(uint32_t *stack_frame) {
     int core_id = get_core_num();
     core_scheduler_t *sched = &core_schedulers[core_id];
     fault_count++;
     last_fault_pc = stack_frame[6];
-    sched->tasks[sched->current_task].state = DORMANT;
+    printf("[HardFault] Core %d - Count: %u, Last PC: 0x%08X\n", core_id, fault_count, last_fault_pc);
+    if (sched->current_task != -1) {
+        sched->tasks[sched->current_task].state = DORMANT;
+    }
+    // pensv 
     *(volatile uint32_t *)0xE000ED04 = (1 << 28);
+    stack_frame[6] = (uint32_t)secure_waitt;
+
 }
 
 void __attribute__((naked)) HardFault_Handler(void) {
@@ -92,16 +104,16 @@ void mpu_init(void) {
     MPU_RNR = 0;
     MPU_RBAR = 0x00000000;
     MPU_RASR = (3 << 24) |   // AP=011: Full access
-               (31 << 1) |   // SIZE=31 → 4GB
+               (31 << 1) |   // 4GB
                (1 << 0);
 
     // Region 1: IO_BANK0 (0x40014000, 16KB) — Solo kernel
-    // Protege registros GPIO (pin de la bomba). User → HardFault.
+    // Protege registros GPIO (pin de la bomba)
     MPU_RNR = 1;
     MPU_RBAR = 0x40014000;
     MPU_RASR = (1 << 28) |   // XN
                (1 << 24) |   // AP=001: Solo privilegiado
-               (13 << 1) |   // SIZE=13 → 16KB
+               (13 << 1) |   // 16KB
                (1 << 0);
 
     // Region 2: PADS_BANK0 (0x4001C000, 4KB) — Solo kernel
@@ -110,8 +122,9 @@ void mpu_init(void) {
     MPU_RBAR = 0x4001C000;
     MPU_RASR = (1 << 28) |   // XN
                (1 << 24) |   // AP=001: Solo privilegiado
-               (11 << 1) |   // SIZE=11 → 4KB
+               (11 << 1) |   // 4KB
                (1 << 0);
+
 
     MPU_CTRL = (1 << 0) | (1 << 2);  // MPU activa + PRIVDEFENA
 

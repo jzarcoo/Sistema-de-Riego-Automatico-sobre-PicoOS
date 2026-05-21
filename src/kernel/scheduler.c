@@ -118,7 +118,7 @@ uint32_t schedule(uint32_t current_sp) {
             : "=r" (control)
         );
 
-        control |= 0x2;
+        control |= 0x3;
 
         __asm volatile (
             "msr control, %0"
