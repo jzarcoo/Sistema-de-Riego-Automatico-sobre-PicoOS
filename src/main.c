@@ -206,6 +206,7 @@ int main() {
     task_create_on_core(0, 0, logger_task);
     task_create_on_core(0, 1, display_task);
 
+
     mq_init(&irrigation_queue);
 
     printf("[CORE0] Iniciado - Planificador, UI y logs\n");
@@ -226,3 +227,19 @@ int main() {
         __asm volatile ("wfi");
     }
 }
+// #include "pico/stdlib.h"
+
+// #define BOMBA_PIN 6
+
+// int main() {
+//     stdio_init_all();
+
+//     gpio_init(BOMBA_PIN);
+//     gpio_set_dir(BOMBA_PIN, GPIO_OUT);
+
+//     while (true) {
+//         gpio_put(BOMBA_PIN, 1);
+//     }
+
+//     return 0;
+// }

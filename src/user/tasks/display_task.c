@@ -11,7 +11,7 @@ void display_task(void) {
     message_t disp_msg;
     while (1) {
 
-        //gpio_put(17, 1);
+        gpio_put(6, 1);
         sys_heartbeat();
         if (mq_receive(&display_queue, &disp_msg) == 0) {
             if (disp_msg.type == MSG_DISPLAY_TEXT) {
