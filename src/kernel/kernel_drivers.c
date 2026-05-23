@@ -15,10 +15,7 @@
  */
 
 #include <stdint.h>
-#include <stdio.h>
-#include "pico/multicore.h"
 #include "hardware/adc.h"
-#include "hardware/irq.h"
 #include "kernel_hw_config.h"
 
 /* Direcciones base del SIO para control GPIO */
@@ -35,12 +32,6 @@
 /* Direcciones de PADS_BANK0 para resistencias pull */
 #define PADS_GPIO(x) (PADS_BANK0_BASE + 0x04 + (x)*4)
 
-/* Registros de habilitacion de interrupciones GPIO por procesador */
-#define IO_BANK0_PROC0_INTE0_BASE (IO_BANK0_BASE + 0x100)
-#define IO_BANK0_PROC1_INTE0_BASE (IO_BANK0_BASE + 0x110)
-
-/* Registros de estado raw de interrupciones (INTR) */
-#define IO_BANK0_INTR0_BASE (IO_BANK0_BASE + 0x0F0)
 
 /**
  * @brief Inicializa un pin GPIO para funcion SIO y configura direccion.
@@ -55,6 +46,10 @@ void k_gpio_init(uint32_t pin, uint32_t output)
 {
     volatile uint32_t *gpio_ctrl = (volatile uint32_t *)IO_BANK0_GPIO_CTRL(pin);
     *gpio_ctrl = (*gpio_ctrl & ~0x1F) | GPIO_FUNC_SIO;
+
+    /* Habilitar input en pad (bit 6 = IE) y desactivar output disable (bit 7 = OD) */
+    volatile uint32_t *pad_ctrl = (volatile uint32_t *)PADS_GPIO(pin);
+    *pad_ctrl = (*pad_ctrl | (1 << 6)) & ~(1 << 7);
 
     if (output)
         *(volatile uint32_t *)SIO_GPIO_OE_SET = (1 << pin);
@@ -118,68 +113,6 @@ void k_gpio_pulldown(uint32_t pin) {
     *pad_ctrl &= ~(1 << 3);
 }
 
-/**
- * @brief Habilita interrupcion por flanco en un pin GPIO.
- *
- * Escribe en los registros INTE del procesador correspondiente.
- * Los pines se agrupan en bancos de 8, con 4 bits por pin
- * (bit+2 = falling edge, bit+3 = rising edge).
- *
- * @param pin Numero de GPIO.
- * @param rising_edge 1 para flanco de subida, 0 para flanco de bajada.
- */
-void k_gpio_irq_enable(uint32_t pin, uint32_t rising_edge) {
-    uint32_t bank_idx = pin / 8;
-    uint32_t pin_in_bank = pin % 8;
-    uint32_t shift = pin_in_bank * 4;
-
-    uint32_t inte_base = (get_core_num() == 0)
-        ? IO_BANK0_PROC0_INTE0_BASE
-        : IO_BANK0_PROC1_INTE0_BASE;
-
-    volatile uint32_t *inte_reg = (volatile uint32_t *)(inte_base + (bank_idx * 4));
-
-    if (rising_edge) {
-        *inte_reg |= (1 << (shift + 3));
-    } else {
-        *inte_reg |= (1 << (shift + 2));
-    }
-
-    printf("[IRQ_EN] pin=%d core=%d reg=0x%08X val=0x%08X\n",
-           pin, get_core_num(), (uint32_t)inte_reg, *inte_reg);
-}
-
-/**
- * @brief Limpia la interrupcion pendiente de un pin GPIO.
- *
- * Escribe 1s en los bits W1C (Write-1-to-Clear) del registro INTR
- * para ambos flancos del pin indicado.
- *
- * @param pin Numero de GPIO.
- */
-void k_gpio_irq_clear(uint32_t pin) {
-    uint32_t bank_idx = pin / 8;
-    uint32_t pin_in_bank = pin % 8;
-    uint32_t shift = pin_in_bank * 4;
-
-    volatile uint32_t *intr_reg = (volatile uint32_t *)(IO_BANK0_INTR0_BASE + (bank_idx * 4));
-
-    *intr_reg = (1 << (shift + 2)) | (1 << (shift + 3));
-}
-
-/**
- * @brief Enciende la bomba de riego (nivel alto en pin de bomba).
- */
-void kernel_pump_on(void) {
-    k_gpio_set(IRRIGATION_PUMP_PIN, 1);
-}
-
-/**
- * @brief Apaga la bomba de riego (nivel bajo en pin de bomba).
- */
-void kernel_pump_off(void) {
-    k_gpio_set(IRRIGATION_PUMP_PIN, 0);
-}
 
 /**
  * @brief Inicializa el ADC para el sensor de humedad del suelo.

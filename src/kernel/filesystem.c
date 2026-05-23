@@ -113,7 +113,7 @@ int fs_create(const char* name) {
             continue;
         }
         if (strncmp(fs_meta->entries[i].name, name, 12) == 0) {
-            printf("FS Error: Archivo con nombre '%s' ya existe.\n", name);
+            printf("FS: '%s' ya existe, reutilizando.\n", name);
             return -2;
         }
         int offset = fs_meta->entries[i].offset, size = fs_meta->entries[i].size;

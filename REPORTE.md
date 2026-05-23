@@ -26,8 +26,8 @@ El RP2040 posee dos cores Cortex-M0+ independientes. Se asignan asimetricamente:
 
 | Core | Rol | Tareas |
 |------|-----|--------|
-| Core 0 | Planificador general, UI, logs | `logger_task`, `display_task` |
-| Core 1 | Monitoreo critico, control de bomba | `irrigation_task`, `sensor_task`, `trigger_task`, `irrigation_task_update` |
+| Core 0 | Planificador general, UI, logs | `logger_task`, `display_task`, `mpu_test_task` |
+| Core 1 | Monitoreo critico, control de bomba | `irrigation_task`, `sensor_task`, `irrigation_update_task` |
 
 Cada core ejecuta su propio scheduler Round-Robin independiente con SysTick a 10ms. No comparten planificador, lo que elimina la necesidad de locks complejos para el scheduling.
 
@@ -36,10 +36,11 @@ Cada core ejecuta su propio scheduler Round-Robin independiente con SysTick a 10
 ### 2.2 Modelo de Comunicacion: Productor-Consumidor
 
 ```
-[sensor_task] --MSG_SOIL_DRY/WET--> [irrigation_queue] --> [irrigation_task]
-[boton IRQ]   --MSG_MANUAL_TRIGGER-> [irrigation_queue] --> [irrigation_task]
-[irrigation_task] --MSG_LOG_TEXT----> [log_queue]        --> [logger_task]
-[irrigation_task] --MSG_DISPLAY_TEXT-> [display_queue]   --> [display_task]
+[sensor_task] --MSG_SOIL_DRY/WET----> [irrigation_queue] --> [irrigation_task]
+[sensor_task] --MSG_DISPLAY_TEXT----> [display_queue]    --> [display_task]
+[boton IRQ]   --MSG_MANUAL_TRIGGER--> [irrigation_queue] --> [irrigation_task]
+[irrigation_task] --MSG_LOG_TEXT-----> [log_queue]        --> [logger_task]
+[irrigation_task] --MSG_DISPLAY_TEXT-> [display_queue]    --> [display_task]
 ```
 
 Las tareas se comunican unicamente por paso de mensajes tipados, evitando variables compartidas y condiciones de carrera.
@@ -54,7 +55,7 @@ IO_IRQ_BANK0 (NVIC Core 1)
     |
     v
 gpio_irq_dispatcher() [ISR]
-    |-- debounce check (1000ms)
+    |-- debounce check (300ms)
     |-- gpio_acknowledge_irq()
     |-- mq_send_from_isr(&irrigation_queue, MSG_MANUAL_TRIGGER)
     v
@@ -78,9 +79,13 @@ La MPU del RP2040 (8 regiones) se configura en su propio modulo (`mpu.c`) para a
 
 **Secuencia de boot:** Los managers de hardware inicializan los perifericos *antes* de activar la MPU. Una vez activa, las tareas de usuario solo pueden acceder a perifericos protegidos mediante syscalls que ejecutan en modo privilegiado.
 
-**Efecto:** Las tareas corren en modo no privilegiado (CONTROL.nPRIV=1). Si `display_task` o cualquier tarea de usuario intenta escribir directamente en un registro GPIO o I2C, la MPU genera un HardFault. El handler mata la tarea sin afectar al kernel ni al plano de control.
+**Proteccion de perifericos por hardware (requisito del profesor):**
 
-**PRIVDEFENA=1:** El modo privilegiado (kernel, handlers, managers) tiene acceso total al mapa de memoria por defecto.
+Las tareas corren en modo no privilegiado (CONTROL.nPRIV=1). Si `display_task` o cualquier tarea de usuario intenta escribir directamente en el registro GPIO que controla la bomba (ej. `*(volatile uint32_t*)0x40014000 = ...`), la MPU detecta la violacion y lanza un HardFault por hardware. El handler mata la tarea ofensora sin afectar al kernel ni al plano de control critico.
+
+Esto NO es proteccion logica por software — es la MPU fisica del ARM Cortex-M0+ la que bloquea el acceso a nivel de bus. El RP2040 no tiene MMU, pero la MPU cumple el rol de aislamiento de perifericos.
+
+**PRIVDEFENA=1:** El modo privilegiado (kernel, handlers, managers) tiene acceso total al mapa de memoria por defecto. Las tareas solo acceden a GPIO/I2C via syscalls que elevan el privilegio de forma controlada (SVC trap).
 
 ### 3.2 Planificador (Scheduler)
 
@@ -109,7 +114,7 @@ kernel_service() [C] -> despacha al servicio (privilegiado)
 Retorno a tarea (resultado en r0)
 ```
 
-Servicios disponibles: GPIO set/get/dir, semaforos, ADC, bomba, sleep, heartbeat, print, display update.
+Servicios disponibles: GPIO set/get, semaforos (init/wait/post), ADC, bomba (request + update), sleep, heartbeat, exit, print, display write/flush, logger (init/write/flush).
 
 ### 3.4 Subsistema de Entrada/Salida (I/O)
 
@@ -141,13 +146,25 @@ Hardware (RP2040 peripherals)
 | GPIO bomba | Write directo | Operacion instantanea, un ciclo de reloj. |
 | I2C display LCD | Double buffer + diff | Solo envia filas modificadas; reduce trafico I2C. |
 
-**Double Buffer con Diff (Display LCD):**
+**I/O Bufferizado (Write + Flush) con layout fijo:**
 
-El display manager mantiene dos buffers de texto (20x4 caracteres cada uno):
-- `back_buf`: donde se compone el proximo frame.
-- `front_buf`: copia de lo que el LCD muestra actualmente.
+El display tiene 4 filas con roles fijos:
+- Fila 0: Humedad (sensor_task actualiza cada 5s).
+- Fila 1: Estado de la bomba (irrigation_task).
+- Fila 2: Ultimo evento del sistema.
+- Fila 3: Reservada.
 
-Al actualizar, se comparan fila por fila. Solo las filas que cambiaron se reescriben via I2C. Esto reduce el trafico de 80 bytes (4 filas completas) a solo las filas modificadas.
+Las tareas productoras envian mensajes tipados `MSG_DISPLAY_TEXT` a `display_queue` con `msg.data` indicando la fila destino. La tarea `display_task` (consumidor) recibe el mensaje y ejecuta:
+- `sys_display_write(row, text)`: copia el texto a la fila indicada del back buffer (O(1), nanosegundos).
+- `sys_display_flush()`: envia al LCD solo las filas que cambiaron vs. el front buffer.
+
+**Diff Buffer por fila:**
+
+El driver mantiene dos buffers (20 chars x 4 filas cada uno):
+- `back_buf`: estado deseado (lo que se quiere mostrar).
+- `front_buf`: estado actual del LCD.
+
+Al flush, se compara `memcmp()` fila por fila. Solo las filas donde `back != front` se reescriben. Cada fila se envia como batch de 84 bytes en una sola transaccion I2C (vs. 4 transacciones por caracter sin batch).
 
 **Por que no DMA:**
 
@@ -155,18 +172,20 @@ El LCD 2004A usa un controlador HD44780 accesible via expansor I2C PCF8574 en mo
 
 **Display LCD 2004A (JHD-204A):**
 
-Driver del controlador HD44780 via PCF8574T a 100kHz. Soporta:
+Driver del controlador HD44780 via PCF8574T a 400kHz. Soporta:
 - Inicializacion del modo 4-bit segun datasheet HD44780.
 - Escritura de texto con el charset integrado del LCD (ASCII completo).
 - 20 caracteres x 4 lineas con backlight controlable.
-- Auto-deteccion de direccion I2C (scan 0x27, 0x3F).
+- Deteccion de conexion I2C con timeout (no bloquea si desconectado).
+- Tolerancia a fallos I2C: si el LCD deja de responder, el driver
+  se desactiva automaticamente sin afectar al resto del sistema.
 
 ### 3.5 Semaforos
 
 Primitivas del kernel, creadas durante el boot y expuestas a user tasks via syscall. Semaforos de conteo con cola de espera FIFO (hasta 10 tareas). Usados como mutex (inicializados a 1) para:
 - `irrigation_pump_sem`: Exclusion mutua para activar la bomba.
 - `logger_sem`: Exclusion mutua para escritura en Flash.
-- `display_sem`: Exclusion mutua para el display OLED.
+- `display_sem`: Exclusion mutua para el display LCD.
 
 Cuando una tarea hace `k_sem_wait` y el recurso no esta disponible, se bloquea (BLOCKED) y se encola. Al hacer `k_sem_post`, se despierta la primera tarea en espera.
 
@@ -261,7 +280,7 @@ Sistema-de-Riego-Automatico-sobre-PicoOS/
 ├── include/
 │   ├── kernel/
 │   │   ├── mpu.h              # Memory Protection Unit
-│   │   ├── display_manager.h  # Driver OLED SSD1306 (I2C)
+│   │   ├── display_manager.h  # Driver LCD 2004A (I2C)
 │   │   ├── irrigation_manager.h # Driver de riego (bomba/sensor)
 │   │   ├── scheduler.h        # TCB, estados, scheduler por core
 │   │   ├── semaphore.h        # Semaforos con cola FIFO
@@ -283,7 +302,7 @@ Sistema-de-Riego-Automatico-sobre-PicoOS/
 │   │   └── syscalls.s         # Syscall stubs (ASM)
 │   ├── kernel/
 │   │   ├── mpu.c             # Configuracion de regiones MPU
-│   │   ├── display_manager.c # Driver OLED: double buffer, I2C
+│   │   ├── display_manager.c # Driver LCD: write+flush, I2C batch
 │   │   ├── irrigation_manager.c # Maquina de estados bomba
 │   │   ├── scheduler.c       # Planificador Round-Robin
 │   │   ├── semaphore.c       # Implementacion de semaforos
@@ -300,9 +319,9 @@ Sistema-de-Riego-Automatico-sobre-PicoOS/
 │       └── tasks/
 │           ├── irrigation_task.c # Consumidor de cola de riego
 │           ├── sensor_task.c     # Lectura periodica ADC
-│           ├── trigger_task.c    # Heartbeat para boton manual
 │           ├── logger_task.c     # Consumidor de cola de logs
-│           └── display_task.c    # Consumidor de cola display
+│           ├── display_task.c    # Consumidor de cola display
+│           └── mpu_test_task.c   # Demo violacion MPU + recovery
 ```
 
 ---
@@ -366,7 +385,7 @@ minicom -D /dev/ttyACM0 -b 115200
 |-----------|----------|------|-------|
 | Bomba (rele) | Pin 9 | GPIO 6 | Salida, pull-down, activa en LOW |
 | Sensor humedad | Pin 31 | GPIO 26 (ADC0) | Entrada analogica |
-| Boton manual | Pin 21 | GPIO 16 | Entrada, pull-up, rising edge |
+| Boton manual | Pin 19 | GPIO 14 | Entrada, pull-down, rising edge |
 | LCD SDA | Pin 6 | GPIO 4 | I2C0 Data (LCD 2004A) |
 | LCD SCL | Pin 7 | GPIO 5 | I2C0 Clock (LCD 2004A) |
 
@@ -386,7 +405,7 @@ minicom -D /dev/ttyACM0 -b 115200
 | Sincronizacion | Semaforos de conteo con cola FIFO | `semaphore.c` |
 | Interrupciones de HW | GPIO IRQ con debounce y dispatch | `kernel_events.c` |
 | Entrada/Salida | Jerarquia: syscall -> manager -> driver -> HW | `kernel_service.c`, managers |
-| Double buffer + diff | Buffers duales, solo reescribe filas modificadas | `display_manager.c` |
+| I/O bufferizado | Write+flush, diff buffer, batch I2C por fila | `display_manager.c` |
 | Memoria virtual (sim.) | Page cache con reemplazo LRU | `log_memory.c` |
 | Sistema de archivos | Filesystem plano sobre Flash | `filesystem.c` |
 | Tolerancia a fallos | Watchdog heartbeat + HardFault handler | `watchdog_supervisor.c`, `main.c` |
@@ -420,25 +439,19 @@ minicom -D /dev/ttyACM0 -b 115200
 │  ┌──────────────────────────┐   │   ┌──────────────────────────┐        │
 │  │ display_task             │   │   │ sensor_task              │        │
 │  │ - Consume display_queue  │   │   │ - Lee ADC cada 5s        │        │
-│  │ - Muestra en serial/OLED │   │   │ - Envia DRY/WET a cola   │        │
+│  │ - write+flush al LCD     │   │   │ - Envia DRY/WET a cola   │        │
 │  └──────────────────────────┘   │   └──────────────────────────┘        │
 │                                 │                                        │
 │                                 │   ┌──────────────────────────┐        │
-│                                 │   │ trigger_task             │        │
-│                                 │   │ - Heartbeat (boton por   │        │
-│                                 │   │   IRQ directa)           │        │
-│                                 │   └──────────────────────────┘        │
-│                                 │                                        │
-│                                 │   ┌──────────────────────────┐        │
-│                                 │   │ irrigation_task_update   │        │
+│                                 │   │ irrigation_update_task   │        │
 │                                 │   │ - Maquina de estados     │        │
-│                                 │   │   bomba ON/OFF           │        │
+│                                 │   │   bomba ON/OFF (syscall) │        │
 │                                 │   └──────────────────────────┘        │
 ├─────────────────────────────────┴───────────────────────────────────────┤
 │                          KERNEL (Privilegiado)                           │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  MPU: IO_BANK0 + PADS_BANK0 protegidos (solo kernel)                   │
-│  SVC Handler -> kernel_service() -> GPIO, ADC, Semaforos, Sleep         │
+│  MPU: IO_BANK0 + PADS_BANK0 + I2C0 protegidos (solo kernel)             │
+│  SVC Handler -> kernel_service() -> GPIO, ADC, I2C, Semaforos, Sleep    │
 │  HardFault Handler -> mata tarea, PendSV, continua                      │
 │  Flash ops: multicore_lockout + disable interrupts                      │
 ├─────────────────────────────────────────────────────────────────────────┤
@@ -446,7 +459,7 @@ minicom -D /dev/ttyACM0 -b 115200
 ├─────────────────────────────────────────────────────────────────────────┤
 │  irrigation_queue: sensor/boton -> irrigation_task (inter-core)         │
 │  log_queue:        irrigation_task -> logger_task                        │
-│  display_queue:    irrigation_task -> display_task                       │
+│  display_queue:    sensor/irrigation_task -> display_task                │
 │  Semaforos:        irrigation_pump_sem, logger_sem, display_sem          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -473,6 +486,28 @@ minicom -D /dev/ttyACM0 -b 115200
 
 ---
 
-## 9. Conclusiones
+## 9. Mapeo de Practicas del Curso al Proyecto
+
+El proyecto integra los conceptos de las 10 practicas del laboratorio:
+
+| Practica | Concepto SO | Implementacion en el proyecto |
+|----------|------------|-------------------------------|
+| P2: Syscalls | Interfaz kernel/usuario via SVC | `syscalls.s` + `kernel_service.c`: 17 servicios activos |
+| P3: Context Switch | PendSV + interrupciones GPIO | `pendsv.s` (save/restore R4-R11) + `kernel_events.c` (boton) |
+| P4: Scheduler | Round-Robin preemptivo con SysTick | `scheduler.c`: dual-core, quantum 100ms, estados de tarea |
+| P5: Semaforos | Sincronizacion con cola de espera | `semaphore.c`: 3 mutex (bomba, logger, display) via syscall |
+| P6: Memoria Virtual | Page cache LRU, page faults | `log_memory.c`: 6 paginas en RAM, reemplazo LRU, flush a Flash |
+| P7: MPU + Recovery | Proteccion de perifericos, HardFault | `mpu.c`: 4 regiones HW + reinicio automatico de tareas |
+| P8: Filesystem | PicoFS sobre Flash | `filesystem.c`: create/write/read/delete/compact sobre Flash |
+| P9: UART + I/O | Polling, Interrupts, DMA, analisis | ADC=polling, boton=IRQ, LCD=polling+timeout, UART=sys_print |
+| P10: Dual-Core | Multiprocesamiento asimetrico | Core 0 (UI/logs) + Core 1 (sensor/bomba), colas inter-core |
+
+### Justificacion de sys_print vs printf
+
+Las tareas de usuario no pueden llamar `printf()` directamente porque corren en modo no privilegiado. El hardware UART esta mapeado en el espacio de perifericos, y aunque no tiene una region MPU explicita asignada, el modelo arquitectonico exige que todo acceso a hardware pase por el kernel via syscall. `sys_print()` genera un SVC trap que eleva el privilegio, y el kernel ejecuta `printf()` en modo privilegiado. Codigo kernel (boot, ISRs, managers) si usa `printf()` directo.
+
+---
+
+## 10. Conclusiones
 
 El sistema implementa un RTOS funcional con separacion de privilegios, aislamiento de memoria, comunicacion por mensajes, y tolerancia a fallos, todo sobre un microcontrolador de $4 USD. Los conceptos de sistemas operativos (scheduling, IPC, proteccion de memoria, filesystem, manejo de interrupciones) se aplican de forma tangible sobre hardware real, demostrando que los principios teoricos del curso tienen impacto directo en la confiabilidad y seguridad de sistemas embebidos.

@@ -2,63 +2,39 @@
  * @file kernel_service.c
  * @brief Despachador de syscalls (Supervisor Call handler).
  *
- * Implementa la interfaz kernel-usuario. Las tareas en modo no
- * privilegiado invocan instrucciones SVC con un ID de syscall;
- * el handler de SVC extrae los argumentos del stack frame y
- * llama a kernel_service() que despacha al servicio correspondiente.
- *
- * Servicios disponibles:
- * - GPIO: set, get, dir, pullup, irq_register
- * - ADC: init, read sensor
- * - Semaforos: init, wait, post
- * - Bomba: on, off, request_irrigation
- * - Scheduler: sleep, exit, heartbeat
- * - I/O: print
+ * Las tareas en modo no privilegiado invocan SVC con un ID;
+ * el handler extrae argumentos del stack frame y despacha aqui.
  */
 
 #include <stdint.h>
 #include <stdio.h>
-#include "pico/multicore.h"
 #include "kernel_drivers.h"
-#include "kernel_events.h"
 #include "irrigation_manager.h"
 #include "display_manager.h"
 #include "semaphore.h"
 #include "scheduler.h"
 #include "watchdog_supervisor.h"
-#include "message_queue.h"
+#include "logger.h"
+#include "log_memory.h"
 
 #define SYS_GPIO_SET 1
 #define SYS_GPIO_GET 2
-#define SYS_GPIO_DIR 3
 #define SYS_EXIT 4
 #define SYS_SEM_WAIT 5
 #define SYS_SEM_POST 6
-#define SYS_PUMP_ON 7
-#define SYS_PUMP_OFF 8
 #define SYS_READ_SOIL_SENSOR 9
-#define SYS_LOG_EVENT 10
 #define SYS_HEARTBEAT 11
 #define SYS_SEM_INIT 12
-#define SYS_ADC_INIT 13
-#define SYS_PULLUP 14
-#define SYS_GPIO_IRQ_REGISTER 15
 #define SYS_REQUEST_IRRIGATION 17
 #define SYS_SLEEP 18
 #define SYS_PRINT 19
 #define SYS_REQUEST_DISPLAY_UPDATE 20
+#define SYS_DISPLAY_REFRESH 21
+#define SYS_IRRIGATION_UPDATE 22
+#define SYS_LOGGER_INIT 23
+#define SYS_LOG_WRITE 24
+#define SYS_LOG_FLUSH 25
 
-/**
- * @brief Despachador principal de syscalls.
- *
- * Recibe el stack frame de la tarea y el ID de syscall extraido
- * por el handler de ensamblador (svc_handler.s). Ejecuta la
- * operacion solicitada en modo privilegiado y retorna el resultado
- * en svc_args[0] cuando aplica.
- *
- * @param svc_args Puntero al stack frame de la tarea (R0-R3 del caller).
- * @param syscall_id Numero de syscall (extraido del byte inmediato de SVC).
- */
 void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
     switch (syscall_id) {
         case SYS_GPIO_SET:
@@ -68,17 +44,6 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
         case SYS_GPIO_GET: {
             int result = k_gpio_get(svc_args[0]);
             svc_args[0] = result;
-            break;
-        }
-
-        case SYS_GPIO_DIR: {
-            int pin = svc_args[0];
-            if (pin < 2 || pin > 28) {
-                svc_args[0] = -1;
-            } else {
-                k_gpio_init(pin, svc_args[1]);
-                svc_args[0] = 0;
-            }
             break;
         }
 
@@ -94,14 +59,6 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
             k_sem_post((kernel_semaphore_t *)svc_args[0]);
             break;
 
-        case SYS_PUMP_ON:
-            kernel_pump_on();
-            break;
-
-        case SYS_PUMP_OFF:
-            kernel_pump_off();
-            break;
-
         case SYS_READ_SOIL_SENSOR:
             svc_args[0] = kernel_read_soil_sensor();
             break;
@@ -112,23 +69,6 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
 
         case SYS_SEM_INIT:
             k_sem_init((kernel_semaphore_t *)svc_args[0], svc_args[1]);
-            break;
-
-        case SYS_ADC_INIT:
-            k_adc_init();
-            break;
-
-        case SYS_PULLUP:
-            k_gpio_pullup(svc_args[0]);
-            break;
-
-        case SYS_GPIO_IRQ_REGISTER:
-            k_gpio_event_register(
-                svc_args[0],
-                svc_args[1],
-                (message_queue_t *)svc_args[2],
-                (message_type_t)svc_args[3]
-            );
             break;
 
         case SYS_REQUEST_IRRIGATION:
@@ -142,9 +82,30 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
         case SYS_PRINT:
             printf("%s", (const char *)svc_args[0]);
             break;
-        
+
         case SYS_REQUEST_DISPLAY_UPDATE:
-            display_manager_update((const char *)svc_args[0]);
+            display_manager_set_row((int)svc_args[0], (const char *)svc_args[1]);
+            break;
+
+        case SYS_DISPLAY_REFRESH:
+            display_manager_refresh();
+            break;
+
+        case SYS_IRRIGATION_UPDATE:
+            irrigation_manager_update();
+            break;
+
+        case SYS_LOGGER_INIT:
+            logger_init();
+            log_memory_init();
+            break;
+
+        case SYS_LOG_WRITE:
+            log_cache_write((const char *)svc_args[0]);
+            break;
+
+        case SYS_LOG_FLUSH:
+            log_flush_all();
             break;
 
         default:

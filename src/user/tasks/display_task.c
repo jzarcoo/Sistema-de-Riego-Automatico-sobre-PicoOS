@@ -1,25 +1,29 @@
 /**
  * @file display_task.c
- * @brief Tarea de actualizacion del display OLED (user space).
+ * @brief Tarea del display LCD (user space).
  *
- * Consume mensajes MSG_DISPLAY_TEXT de display_queue y solicita
- * al kernel que actualice la pantalla via syscall.
+ * Consume mensajes de display_queue, escribe la fila indicada
+ * (msg.data = numero de fila) y hace flush. Protegido por display_sem.
+ *
  * Corre en Core 0 (plano de gestion/UI).
  */
 
-#include <stdio.h>
 #include "user_app.h"
 #include "message_queue.h"
 #include "syscalls.h"
 
 void display_task(void) {
-    message_t disp_msg;
+    sys_print("[CORE0] Display Task iniciada.\n");
+    message_t msg;
+
     while (1) {
         sys_heartbeat();
-        if (mq_receive(&display_queue, &disp_msg) == 0) {
-            if (disp_msg.type == MSG_DISPLAY_TEXT) {
+
+        if (mq_receive(&display_queue, &msg) == 0) {
+            if (msg.type == MSG_DISPLAY_TEXT) {
                 sys_sem_wait(&display_sem);
-                sys_request_display_update(disp_msg.text);
+                sys_display_write(msg.data, msg.text);
+                sys_display_flush();
                 sys_sem_post(&display_sem);
             }
         }

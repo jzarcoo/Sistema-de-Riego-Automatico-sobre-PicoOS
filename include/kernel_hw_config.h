@@ -21,7 +21,7 @@
 #define SOIL_MOISTURE_SENSOR_PIN 26
 
 /* --- Boton de riego manual --- */
-#define BUTTON_PIN               16
+#define BUTTON_PIN               14
 
 /* --- Display OLED (I2C0) --- */
 #define DISPLAY_SDA_PIN          4

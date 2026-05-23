@@ -3,9 +3,7 @@
  * @brief Interfaz de syscalls para tareas de usuario.
  *
  * Las tareas en modo no privilegiado usan estas funciones para
- * solicitar servicios al kernel via instrucciones SVC. Cada funcion
- * genera un trap al handler de SVC que despacha al servicio apropiado
- * en modo privilegiado.
+ * solicitar servicios al kernel via instrucciones SVC.
  */
 
 #ifndef SYSCALLS_H
@@ -20,9 +18,6 @@ void sys_gpio_set(int pin, int value);
 /** Lee nivel de entrada de un GPIO */
 int sys_gpio_get(int pin);
 
-/** Configura direccion de un GPIO (1=output, 0=input) */
-int sys_gpio_dir(int pin, int output);
-
 /** Inicializa un semaforo con valor inicial */
 void sys_sem_init(kernel_semaphore_t *sem, int valor_inicial);
 
@@ -32,23 +27,8 @@ void sys_sem_wait(kernel_semaphore_t *sem);
 /** Libera un semaforo */
 void sys_sem_post(kernel_semaphore_t *sem);
 
-/** Habilita pull-up interno en un pin */
-void sys_gpio_pullup(int pin);
-
-/** Registra un pin como fuente de IRQ con cola destino */
-void sys_gpio_irq_register(int pin, message_queue_t *queue, message_type_t msg_type);
-
-/** Inicializa el ADC para el sensor de humedad */
-void sys_adc_init(void);
-
 /** Lee el valor del sensor de humedad (0-4095) */
 int sys_read_soil_sensor(void);
-
-/** Enciende la bomba (acceso directo, preferir sys_request_irrigation) */
-void sys_pump_on(void);
-
-/** Apaga la bomba */
-void sys_pump_off(void);
 
 /** Solicita un ciclo de riego al irrigation_manager */
 void sys_request_irrigation(void);
@@ -65,7 +45,22 @@ void sys_exit(void);
 /** Imprime texto por serial (via kernel) */
 void sys_print(const char* str);
 
-/** Solicita una actualizacion del display con el texto dado */
-void sys_request_display_update(const char* text);
+/** Escribe texto en una fila del display (no hace I2C, retorna inmediato) */
+void sys_display_write(int row, const char* text);
+
+/** Flush: envia el buffer al LCD via I2C */
+void sys_display_flush(void);
+
+/** Ejecuta irrigation_manager_update en modo privilegiado (accede GPIO) */
+void sys_irrigation_update(void);
+
+/** Inicializa filesystem + page cache (accede Flash, requiere privilegio) */
+void sys_logger_init(void);
+
+/** Escribe texto en la page cache del log */
+void sys_log_write(const char* text);
+
+/** Flush de paginas dirty a Flash */
+void sys_log_flush(void);
 
 #endif

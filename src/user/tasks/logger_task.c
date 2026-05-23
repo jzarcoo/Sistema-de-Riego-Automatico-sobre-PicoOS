@@ -15,11 +15,8 @@
  * Corre en Core 0 (plano de gestion).
  */
 
-#include <stdio.h>
 #include <string.h>
 
-#include "logger.h"
-#include "log_memory.h"
 #include "message_queue.h"
 #include "user_app.h"
 #include "syscalls.h"
@@ -32,10 +29,9 @@
  * LRU cuando se llena), y periodicamente vuelca todo a Flash.
  */
 void logger_task(void) {
-    logger_init();
+    sys_print("[CORE0] Logger Task iniciada.\n");
+    sys_logger_init();
     message_t log_msg;
-
-    log_memory_init();
     int flush_counter = 0;
 
     while (1) {
@@ -43,14 +39,14 @@ void logger_task(void) {
         if (mq_receive(&log_queue, &log_msg) == 0) {
             if (log_msg.type == MSG_LOG_TEXT) {
                 sys_sem_wait(&logger_sem);
-                log_cache_write(log_msg.text);
+                sys_log_write(log_msg.text);
                 flush_counter++;
                 sys_sem_post(&logger_sem);
             }
         }
         if (flush_counter >= 10) {
             sys_sem_wait(&logger_sem);
-            log_flush_all();
+            sys_log_flush();
             sys_sem_post(&logger_sem);
             flush_counter = 0;
         }

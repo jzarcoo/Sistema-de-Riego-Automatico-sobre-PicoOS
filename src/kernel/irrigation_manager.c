@@ -12,6 +12,8 @@
 #include "kernel_hw_config.h"
 #include "scheduler.h"
 
+extern uint32_t last_irq_time;
+
 #define PUMP_TIMEOUT_TICKS 2500
 #define PUMP_MIN_TICKS     300
 #define SOIL_WET_THRESHOLD 2500
@@ -28,7 +30,7 @@ void irrigation_manager_init(void) {
     k_adc_init();
 
     k_gpio_init(BUTTON_PIN, 0);
-    k_gpio_pullup(BUTTON_PIN);
+    k_gpio_pulldown(BUTTON_PIN);
 }
 
 void irrigation_manager_request_water(void) {
@@ -41,6 +43,7 @@ void irrigation_manager_update(void) {
         pumping = 1;
         pump_start_tick = core_schedulers[1].kernel_ticks;
         irrigation_requested = 0;
+        last_irq_time = core_schedulers[1].kernel_ticks * 10;
     }
 
     if (pumping) {
@@ -53,6 +56,7 @@ void irrigation_manager_update(void) {
         if (humidity < SOIL_WET_THRESHOLD || elapsed > PUMP_TIMEOUT_TICKS) {
             k_gpio_set(IRRIGATION_PUMP_PIN, 1);
             pumping = 0;
+            last_irq_time = core_schedulers[1].kernel_ticks * 10;
         }
     }
 }

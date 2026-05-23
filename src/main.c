@@ -35,9 +35,9 @@
 
 extern void irrigation_task(void);
 extern void sensor_task(void);
-extern void trigger_task(void);
 extern void logger_task(void);
 extern void display_task(void);
+extern void mpu_test_task(void);
 
 #define SYSTICK_BASE     0xE000E000
 #define SYSTICK_CTRL (*(volatile uint32_t *)(SYSTICK_BASE + 0x10))
@@ -102,7 +102,7 @@ void __attribute__((naked)) HardFault_Handler(void) {
 static void irrigation_update_task(void) {
     while (1) {
         sys_heartbeat();
-        irrigation_manager_update();
+        sys_irrigation_update();
     }
 }
 
@@ -118,26 +118,31 @@ void core1_entry(void) {
 
     core_schedulers[1].current_task = -1;
     core_schedulers[1].num_tasks = 0;
+    printf("[CORE1] Scheduler init.\n");
 
     /* --- Hardware init (privilegiado, antes de MPU) --- */
+    printf("[CORE1] Init irrigation manager...\n");
     irrigation_manager_init();
+    printf("[CORE1] Init event system...\n");
     k_gpio_event_system_init();
     k_gpio_event_register(BUTTON_PIN, GPIO_IRQ_EDGE_RISE,
                           &irrigation_queue, MSG_MANUAL_TRIGGER);
+    printf("[CORE1] Boton GPIO %d registrado (rising edge).\n", BUTTON_PIN);
 
     /* --- Recursos IPC (kernel crea, user tasks usan) --- */
     k_sem_init(&irrigation_pump_sem, 1);
+    printf("[CORE1] Semaforo bomba init.\n");
 
     /* --- Activar proteccion de memoria --- */
     mpu_init();
+    printf("[CORE1] MPU activada.\n");
 
     /* --- Crear tareas --- */
     task_create_on_core(1, 0, irrigation_task);
     task_create_on_core(1, 1, sensor_task);
-    task_create_on_core(1, 2, trigger_task);
-    task_create_on_core(1, 3, irrigation_update_task);
-
-    printf("[CORE1] Iniciado - Plano critico\n");
+    task_create_on_core(1, 2, irrigation_update_task);
+    printf("[CORE1] 3 tareas creadas.\n");
+    printf("[CORE1] Iniciando scheduler...\n");
 
     __asm volatile ("msr psp, %0" : : "r" (0));
     systick_init(1250000);
@@ -156,21 +161,26 @@ int main() {
         sleep_ms(100);
     }
     sleep_ms(500);
-    printf("Conexion USB establecida.\n");
+    printf("=== PicoOS Boot ===\n");
+    printf("[BOOT] USB conectado.\n");
 
     /* Inicializar schedulers */
     core_schedulers[0].current_task = -1;
     core_schedulers[0].num_tasks = 0;
     core_schedulers[1].current_task = -1;
     core_schedulers[1].num_tasks = 0;
+    printf("[BOOT] Schedulers init OK.\n");
 
     /* Exception handlers */
     exception_set_exclusive_handler((enum exception_number)EXCEPTION_SVC, wrapper_svc);
     exception_set_exclusive_handler((enum exception_number)EXCEPTION_PENDSV, isr_pendsv);
     exception_set_exclusive_handler((enum exception_number)EXCEPTION_HARDFAULT, HardFault_Handler);
+    printf("[BOOT] Exception handlers OK.\n");
 
     /* --- Hardware init (privilegiado, antes de MPU) --- */
+    printf("[BOOT] Iniciando LCD...\n");
     display_manager_init();
+    printf("[BOOT] LCD init done.\n");
 
     /* --- Recursos IPC (kernel crea, user tasks usan) --- */
     mq_init(&irrigation_queue);
@@ -178,20 +188,23 @@ int main() {
     mq_init(&display_queue);
     k_sem_init(&logger_sem, 1);
     k_sem_init(&display_sem, 1);
+    printf("[BOOT] IPC (colas + semaforos) OK.\n");
 
     /* --- Crear tareas --- */
     task_create_on_core(0, 0, logger_task);
     task_create_on_core(0, 1, display_task);
-
-    printf("[CORE0] Iniciado - Planificador, UI y logs\n");
+    task_create_on_core(0, 2, mpu_test_task);
+    printf("[BOOT] Tareas Core 0 creadas (incluye MPU test).\n");
 
     /* Lanzar Core 1 */
     multicore_launch_core1(core1_entry);
     sleep_ms(100);
-    printf("[CORE0] Core1 lanzado. Iniciando scheduler...\n");
+    printf("[BOOT] Core 1 lanzado.\n");
 
     /* --- Activar proteccion de memoria --- */
     mpu_init();
+    printf("[BOOT] MPU activada.\n");
+    printf("[BOOT] Iniciando scheduler Core 0...\n");
 
     __asm volatile ("msr psp, %0" : : "r" (0));
     systick_init(1250000);

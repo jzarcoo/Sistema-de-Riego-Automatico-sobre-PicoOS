@@ -2,12 +2,8 @@
  * @file sensor_task.c
  * @brief Tarea de lectura periodica del sensor de humedad.
  *
- * Lee el ADC cada 5 segundos, convierte a porcentaje, muestra
- * estado en display y envia mensaje a la cola de riego.
- *
- * Escala ADC: ~4100 = 0% (aire/seco), ~1800 = 100% (agua/saturado).
- * Ajustar umbrales segun el tipo de tierra.
- *
+ * Lee ADC cada 5s, convierte a %, envia a display_queue (fila 0)
+ * y a irrigation_queue segun umbral.
  * Corre en Core 1 (plano critico).
  */
 
@@ -17,12 +13,10 @@
 #include "user_app.h"
 #include "message_queue.h"
 #include "syscalls.h"
+#include "display_manager.h"
 
-/* Calibracion del sensor (ajustar segun tierra) */
 #define ADC_DRY_VALUE  4100
 #define ADC_WET_VALUE  1800
-
-/* Umbral para activar riego automatico */
 #define IRRIGATION_THRESHOLD 2500
 
 static int adc_to_percent(int adc_value) {
@@ -39,23 +33,26 @@ static const char *humidity_status(int adc_value) {
 }
 
 void sensor_task(void) {
+    sys_print("[CORE1] Sensor Task iniciada.\n");
     message_t msg;
-    char buf[48];
+    char buf[32];
 
     while (1) {
         sys_heartbeat();
         int raw = sys_read_soil_sensor();
         int percent = adc_to_percent(raw);
 
-        snprintf(buf, sizeof(buf), "HUMEDAD: %d%%\n%s", percent, humidity_status(raw));
-
+        /* Enviar a display_queue: fila 0 = humedad */
         msg.type = MSG_DISPLAY_TEXT;
-        strncpy(msg.text, buf, sizeof(msg.text));
+        msg.data = DISPLAY_ROW_HUMIDITY;
+        snprintf(msg.text, sizeof(msg.text), "HUM:%d%% %s", percent, humidity_status(raw));
         mq_send(&display_queue, &msg);
 
+        /* UART debug */
         snprintf(buf, sizeof(buf), "Sensor: %d%% (ADC: %d)\n", percent, raw);
         sys_print(buf);
 
+        /* Enviar a irrigation_queue */
         if (raw > IRRIGATION_THRESHOLD) {
             msg.type = MSG_SOIL_DRY;
             mq_send(&irrigation_queue, &msg);

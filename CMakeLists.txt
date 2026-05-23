@@ -38,7 +38,7 @@ add_executable(ProyectoFinal
     src/user/tasks/irrigation_task.c
     src/user/tasks/logger_task.c
     src/user/tasks/sensor_task.c
-    src/user/tasks/trigger_task.c
+    src/user/tasks/mpu_test_task.c
 )
 
 target_include_directories(ProyectoFinal PRIVATE

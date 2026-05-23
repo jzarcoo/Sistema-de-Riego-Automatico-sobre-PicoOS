@@ -2,62 +2,41 @@
 .cpu cortex-m0plus
 .thumb
 
-@ IDs definitions as seen in kernel_driver.c
 .equ SYS_GPIO_SET, 1
 .equ SYS_GPIO_GET, 2
-.equ SYS_GPIO_DIR, 3
 .equ SYS_EXIT,     4
 .equ SYS_SEM_WAIT, 5
 .equ SYS_SEM_POST, 6
-.equ SYS_PUMP_ON,      7
-.equ SYS_PUMP_OFF,     8
 .equ SYS_READ_SOIL_SENSOR,  9
-.equ SYS_LOG_EVENT,    10
 .equ SYS_HEARTBEAT,    11
 .equ SYS_SEM_INIT,     12
-.equ SYS_ADC_INIT,     13
-.equ SYS_PULLUP,       14
-.equ SYS_GPIO_IRQ_REGISTER, 15
 .equ SYS_REQUEST_IRRIGATION, 17
 .equ SYS_SLEEP, 18
 .equ SYS_PRINT, 19
 .equ SYS_REQUEST_DISPLAY_UPDATE, 20
-
-@ --- Function: void sys_gpio_dir(int pin, int out) ---
-.global sys_gpio_dir
-.type sys_gpio_dir, %function
-sys_gpio_dir:
-    @ r0: pin
-    @ r1: out (1 = output, 0 = input)
-    @ Save r7 in r12 (caller-saved) to avoid touching the user stack
-    mov r12, r7
-    movs r7, #SYS_GPIO_DIR
-    svc #0
-    mov r7, r12
-    bx lr
+.equ SYS_DISPLAY_REFRESH, 21
+.equ SYS_IRRIGATION_UPDATE, 22
+.equ SYS_LOGGER_INIT, 23
+.equ SYS_LOG_WRITE, 24
+.equ SYS_LOG_FLUSH, 25
 
 @ --- Function: void sys_gpio_set(int pin, int value) ---
 .global sys_gpio_set
 .type sys_gpio_set, %function
 sys_gpio_set:
-    @ r0: pin (Argument 1) - Already in place
-    @ r1: value (Argument 2) - Already in place
-    @ Save r7 in r12 to avoid modifying user stack
     mov r12, r7
-    movs r7, #SYS_GPIO_SET @ Load syscall ID (1)
-    svc #0              @ System Call! (Jump to Kernel)
-    mov r7, r12         @ Restore r7
-    bx lr               @ Return
+    movs r7, #SYS_GPIO_SET
+    svc #0
+    mov r7, r12
+    bx lr
 
 @ --- Function: int sys_gpio_get(int pin) ---
 .global sys_gpio_get
 .type sys_gpio_get, %function
 sys_gpio_get:
-    @ r0: pin (Argument 1)
-    @ Save r7 in r12 to avoid modifying user stack
     mov r12, r7
-    movs r7, #SYS_GPIO_GET @ Load syscall ID (2)
-    svc #0              @ Kernel will place the result in r0
+    movs r7, #SYS_GPIO_GET
+    svc #0
     mov r7, r12
     bx lr
 
@@ -65,56 +44,31 @@ sys_gpio_get:
 .global sys_exit
 .type sys_exit, %function
 sys_exit:
-    @ Save r7 in r12 to avoid modifying user stack
     mov r12, r7
-    movs r7, #SYS_EXIT  @ Load syscall ID (4)
-    svc #0              @ Jump to Kernel
-    mov r7, r12         @ Restore r7
-    bx lr               @ Return (though we wont actually return)
+    movs r7, #SYS_EXIT
+    svc #0
+    mov r7, r12
+    bx lr
 
 @ --- Function: void sys_sem_wait(kernel_semaphore_t *sem) ---
 .global sys_sem_wait
 .type sys_sem_wait, %function
 sys_sem_wait:
-    @ r0: pointer to semaphore 
     mov r12, r7
-    movs r7, #SYS_SEM_WAIT  @ Load syscall ID (5)
-    svc #0                  @ Jump to Kernel
-    mov r7, r12             @ Restore r7
-    bx lr                   @ Return
+    movs r7, #SYS_SEM_WAIT
+    svc #0
+    mov r7, r12
+    bx lr
 
 @ --- Function: void sys_sem_post(kernel_semaphore_t *sem) ---
 .global sys_sem_post
 .type sys_sem_post, %function
 sys_sem_post:
-    @ r0: pointer to semaphore 
     mov r12, r7
-    movs r7, #SYS_SEM_POST  @ Load syscall ID (6)
-    svc #0                  @ Jump to Kernel
-    mov r7, r12             @ Restore r7
-    bx lr                   @ Return
-
-@ --- Function: void sys_pump_on(void) ---
-.global sys_pump_on
-.type sys_pump_on, %function
-sys_pump_on:
-    mov r12, r7
-    movs r7, #SYS_PUMP_ON
+    movs r7, #SYS_SEM_POST
     svc #0
     mov r7, r12
     bx lr
-
-
-@ --- Function: void sys_pump_off(void) ---
-.global sys_pump_off
-.type sys_pump_off, %function
-sys_pump_off:
-    mov r12, r7
-    movs r7, #SYS_PUMP_OFF
-    svc #0
-    mov r7, r12
-    bx lr
-
 
 @ --- Function: int sys_read_soil_sensor(void) ---
 .global sys_read_soil_sensor
@@ -122,29 +76,6 @@ sys_pump_off:
 sys_read_soil_sensor:
     mov r12, r7
     movs r7, #SYS_READ_SOIL_SENSOR
-    svc #0
-    mov r7, r12
-    bx lr
-
-@ --- Function: void sys_gpio_irq_register(int pin, message_queue_t *queue, int msg_type) ---
-.global sys_gpio_irq_register
-.type sys_gpio_irq_register, %function
-sys_gpio_irq_register:
-    @ r0: pin, r1: queue pointer, r2: message type
-    mov r12, r7
-    movs r7, #SYS_GPIO_IRQ_REGISTER
-    svc #0
-    mov r7, r12
-    bx lr
-
-
-@ --- Function: void sys_log_event(int code) ---
-.global sys_log_event
-.type sys_log_event, %function
-sys_log_event:
-    @ r0 = event code
-    mov r12, r7
-    movs r7, #SYS_LOG_EVENT
     svc #0
     mov r7, r12
     bx lr
@@ -163,35 +94,11 @@ sys_heartbeat:
 .global sys_sem_init
 .type sys_sem_init, %function
 sys_sem_init:
-    @ r0: pointer to semaphore
-    @ r1: initial value
     mov r12, r7
     movs r7, #SYS_SEM_INIT
     svc #0
     mov r7, r12
     bx lr
-
-@ --- Function: void sys_adc_init(void) ---
-.global sys_adc_init
-.type sys_adc_init, %function
-sys_adc_init:
-    mov r12, r7
-    movs r7, #SYS_ADC_INIT
-    svc #0
-    mov r7, r12
-    bx lr
-
-@ --- Function: void sys_gpio_pullup(int pin) ---
-.global sys_gpio_pullup
-.type sys_gpio_pullup, %function
-sys_gpio_pullup:
-    @ r0: pin number
-    mov r12, r7
-    movs r7, #SYS_PULLUP
-    svc #0
-    mov r7, r12
-    bx lr
-
 
 @ --- Function: void sys_request_irrigation(void) ---
 .global sys_request_irrigation
@@ -207,7 +114,6 @@ sys_request_irrigation:
 .global sys_sleep
 .type sys_sleep, %function
 sys_sleep:
-    @ r0: milliseconds to sleep
     mov r12, r7
     movs r7, #SYS_SLEEP
     svc #0
@@ -218,20 +124,68 @@ sys_sleep:
 .global sys_print
 .type sys_print, %function
 sys_print:
-    @ r0: pointer to string
     mov r12, r7
     movs r7, #SYS_PRINT
     svc #0
     mov r7, r12
     bx lr
 
-@ --- Function: void sys_request_display_update(const char* text);
-.global sys_request_display_update
-.type sys_request_display_update, %function
-sys_request_display_update:
-    @ r0: pointer to string
+@ --- Function: void sys_display_write(int row, const char* text) ---
+.global sys_display_write
+.type sys_display_write, %function
+sys_display_write:
     mov r12, r7
     movs r7, #SYS_REQUEST_DISPLAY_UPDATE
+    svc #0
+    mov r7, r12
+    bx lr
+
+@ --- Function: void sys_display_flush(void) ---
+.global sys_display_flush
+.type sys_display_flush, %function
+sys_display_flush:
+    mov r12, r7
+    movs r7, #SYS_DISPLAY_REFRESH
+    svc #0
+    mov r7, r12
+    bx lr
+
+@ --- Function: void sys_irrigation_update(void) ---
+.global sys_irrigation_update
+.type sys_irrigation_update, %function
+sys_irrigation_update:
+    mov r12, r7
+    movs r7, #SYS_IRRIGATION_UPDATE
+    svc #0
+    mov r7, r12
+    bx lr
+
+@ --- Function: void sys_logger_init(void) ---
+.global sys_logger_init
+.type sys_logger_init, %function
+sys_logger_init:
+    mov r12, r7
+    movs r7, #SYS_LOGGER_INIT
+    svc #0
+    mov r7, r12
+    bx lr
+
+@ --- Function: void sys_log_write(const char* text) ---
+.global sys_log_write
+.type sys_log_write, %function
+sys_log_write:
+    mov r12, r7
+    movs r7, #SYS_LOG_WRITE
+    svc #0
+    mov r7, r12
+    bx lr
+
+@ --- Function: void sys_log_flush(void) ---
+.global sys_log_flush
+.type sys_log_flush, %function
+sys_log_flush:
+    mov r12, r7
+    movs r7, #SYS_LOG_FLUSH
     svc #0
     mov r7, r12
     bx lr

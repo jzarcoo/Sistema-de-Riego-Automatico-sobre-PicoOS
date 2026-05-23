@@ -20,6 +20,7 @@
 #include "hardware/irq.h"
 #include "hardware/gpio.h"
 #include <stddef.h>
+#include <stdio.h>
 #include <stdint.h>
 
 /** Tabla de eventos GPIO registrados */
@@ -29,18 +30,16 @@ static gpio_event_entry_t gpio_events[MAX_GPIO_EVENTS];
 static int gpio_event_count = 0;
 
 /** Timestamp del ultimo evento procesado (para debounce) */
-static uint32_t last_irq_time = 0;
+uint32_t last_irq_time = 0;
 
 /** Ventana de debounce en milisegundos */
-#define DEBOUNCE_MS 1000
+#define DEBOUNCE_MS 500
 
 /**
  * @brief Handler global de interrupciones GPIO (ISR).
  *
- * Se ejecuta automaticamente cuando un pin configurado genera IRQ.
- * Recorre la tabla de eventos, identifica el pin activo, aplica
- * debounce temporal, y envia el mensaje correspondiente a la cola.
- * Usa mq_send_from_isr() que es safe para contexto de interrupcion.
+ * Filtro triple: debounce + muestreo 3x con delay.
+ * Un spike de relay dura <1ms. Un dedo mantiene >50ms.
  */
 static void gpio_irq_dispatcher(void) {
     uint32_t now = to_ms_since_boot(get_absolute_time());
@@ -58,8 +57,15 @@ static void gpio_irq_dispatcher(void) {
         uint32_t events = gpio_get_irq_event_mask(pin);
         if (events) {
             gpio_acknowledge_irq(pin, events);
-            /* Confirmar que el pin sigue en HIGH (pulsacion real vs ruido) */
+
+            /* Muestreo triple: leer 3 veces con ~1ms entre cada una.
+               Solo aceptar si las 3 lecturas son HIGH. */
             if (!gpio_get(pin)) continue;
+            for (volatile int d = 0; d < 3000; d++);
+            if (!gpio_get(pin)) continue;
+            for (volatile int d = 0; d < 3000; d++);
+            if (!gpio_get(pin)) continue;
+
             last_irq_time = now;
             if (gpio_events[i].queue != NULL) {
                 message_t msg = { .type = gpio_events[i].msg_type };
