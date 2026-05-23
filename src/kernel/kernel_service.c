@@ -1,9 +1,28 @@
+/**
+ * @file kernel_service.c
+ * @brief Despachador de syscalls (Supervisor Call handler).
+ *
+ * Implementa la interfaz kernel-usuario. Las tareas en modo no
+ * privilegiado invocan instrucciones SVC con un ID de syscall;
+ * el handler de SVC extrae los argumentos del stack frame y
+ * llama a kernel_service() que despacha al servicio correspondiente.
+ *
+ * Servicios disponibles:
+ * - GPIO: set, get, dir, pullup, irq_register
+ * - ADC: init, read sensor
+ * - Semaforos: init, wait, post
+ * - Bomba: on, off, request_irrigation
+ * - Scheduler: sleep, exit, heartbeat
+ * - I/O: print
+ */
+
 #include <stdint.h>
 #include <stdio.h>
 #include "pico/multicore.h"
 #include "kernel_drivers.h"
 #include "kernel_events.h"
 #include "irrigation_manager.h"
+#include "display_manager.h"
 #include "semaphore.h"
 #include "scheduler.h"
 #include "watchdog_supervisor.h"
@@ -27,7 +46,19 @@
 #define SYS_REQUEST_IRRIGATION 17
 #define SYS_SLEEP 18
 #define SYS_PRINT 19
+#define SYS_REQUEST_DISPLAY_UPDATE 20
 
+/**
+ * @brief Despachador principal de syscalls.
+ *
+ * Recibe el stack frame de la tarea y el ID de syscall extraido
+ * por el handler de ensamblador (svc_handler.s). Ejecuta la
+ * operacion solicitada en modo privilegiado y retorna el resultado
+ * en svc_args[0] cuando aplica.
+ *
+ * @param svc_args Puntero al stack frame de la tarea (R0-R3 del caller).
+ * @param syscall_id Numero de syscall (extraido del byte inmediato de SVC).
+ */
 void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
     switch (syscall_id) {
         case SYS_GPIO_SET:
@@ -98,7 +129,6 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
                 (message_queue_t *)svc_args[2],
                 (message_type_t)svc_args[3]
             );
-            
             break;
 
         case SYS_REQUEST_IRRIGATION:
@@ -111,6 +141,10 @@ void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
 
         case SYS_PRINT:
             printf("%s", (const char *)svc_args[0]);
+            break;
+        
+        case SYS_REQUEST_DISPLAY_UPDATE:
+            display_manager_update((const char *)svc_args[0]);
             break;
 
         default:

@@ -1,94 +1,71 @@
+/**
+ * @file syscalls.h
+ * @brief Interfaz de syscalls para tareas de usuario.
+ *
+ * Las tareas en modo no privilegiado usan estas funciones para
+ * solicitar servicios al kernel via instrucciones SVC. Cada funcion
+ * genera un trap al handler de SVC que despacha al servicio apropiado
+ * en modo privilegiado.
+ */
+
 #ifndef SYSCALLS_H
 #define SYSCALLS_H
 
 #include "semaphore.h"
 #include "message_queue.h"
 
-/**
- * @file syscalls.h
- * @brief Syscall interfaces for GPIO operations.
- */
-
-/**
- * @brief Syscalls interface for gpio write operation.
- * @param pin GPIO pin number
- * @param value 1 for high, 0 for low
- */
+/** Establece nivel de salida de un GPIO */
 void sys_gpio_set(int pin, int value);
 
-/**
- * @brief Syscalls interface for gpio read operation.
- * @param pin GPIO pin number
- * @return 1 if high, 0 if low
- */
+/** Lee nivel de entrada de un GPIO */
 int sys_gpio_get(int pin);
 
-/**
- * @brief Syscalls interface for gpio direction configuration.
- * @param pin GPIO pin number
- * @param output 1 for output, 0 for input
- * @return 0 on success, -1 on error (e.g., invalid pin)
- */
+/** Configura direccion de un GPIO (1=output, 0=input) */
 int sys_gpio_dir(int pin, int output);
 
-/**
- * @brief Syscalls interface for semaphore initialization.
- * @param sem Pointer to the semaphore to initialize.
- * @param valor_inicial Initial value for the semaphore.
- */
+/** Inicializa un semaforo con valor inicial */
 void sys_sem_init(kernel_semaphore_t *sem, int valor_inicial);
 
-/**
- * @brief Syscalls interface for semaphore wait operation.
- * @param sem Pointer to the semaphore to wait on.
- */
+/** Adquiere un semaforo (bloquea si no hay recursos) */
 void sys_sem_wait(kernel_semaphore_t *sem);
 
-/**
- * @brief Syscalls interface for semaphore post operation.
- * @param sem Pointer to the semaphore to post.
- */
+/** Libera un semaforo */
 void sys_sem_post(kernel_semaphore_t *sem);
 
-/**
- * @brief Syscalls interface to enable internal pull-up resistor on a GPIO pin.
- * @param pin GPIO pin number
- */
+/** Habilita pull-up interno en un pin */
 void sys_gpio_pullup(int pin);
 
-/**
- * @brief Registra una interrupcion GPIO. El kernel configura el pin y
- * despacha msg_type a la cola cuando ocurre un falling edge.
- * @param pin GPIO pin number
- * @param queue Cola donde se enviara el mensaje
- * @param msg_type Tipo de mensaje a enviar
- */
+/** Registra un pin como fuente de IRQ con cola destino */
 void sys_gpio_irq_register(int pin, message_queue_t *queue, message_type_t msg_type);
 
-/**
- * @brief Syscalls interface to initialize the ADC for soil moisture sensor.
- */
+/** Inicializa el ADC para el sensor de humedad */
 void sys_adc_init(void);
 
-/**
- * @brief Syscalls interface to read the soil moisture sensor value.
- * @return Sensor value 
- */
+/** Lee el valor del sensor de humedad (0-4095) */
 int sys_read_soil_sensor(void);
 
+/** Enciende la bomba (acceso directo, preferir sys_request_irrigation) */
 void sys_pump_on(void);
+
+/** Apaga la bomba */
 void sys_pump_off(void);
+
+/** Solicita un ciclo de riego al irrigation_manager */
 void sys_request_irrigation(void);
-void sys_log_event(const char* event);
+
+/** Reporta heartbeat al watchdog del kernel */
 void sys_heartbeat(void);
 
-/**
- * @brief Syscalls interface to terminate a task.
- */
+/** Bloquea la tarea actual por ms milisegundos */
 void sys_sleep(uint32_t ms);
 
+/** Termina la tarea actual */
 void sys_exit(void);
 
+/** Imprime texto por serial (via kernel) */
 void sys_print(const char* str);
+
+/** Solicita una actualizacion del display con el texto dado */
+void sys_request_display_update(const char* text);
 
 #endif

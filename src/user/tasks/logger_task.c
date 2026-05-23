@@ -1,3 +1,20 @@
+/**
+ * @file logger_task.c
+ * @brief Tarea de logging con page cache y flush periodico a Flash.
+ *
+ * Consume mensajes MSG_LOG_TEXT de la cola log_queue y los almacena
+ * en la page cache (log_memory). Cada 10 mensajes, ejecuta un flush
+ * que vuelca las paginas dirty al filesystem en Flash. El acceso
+ * esta protegido por logger_sem.
+ *
+ * Integra los conceptos de:
+ * - Simulacion de memoria virtual (page cache LRU en log_memory.c)
+ * - Sistema de archivos (PicoFS en filesystem.c)
+ * - Productor-consumidor (colas de mensajes)
+ *
+ * Corre en Core 0 (plano de gestion).
+ */
+
 #include <stdio.h>
 #include <string.h>
 
@@ -7,10 +24,12 @@
 #include "user_app.h"
 #include "syscalls.h"
 
-
 /**
- * @brief Tarea de logger que se encarga de recibir mensajes de log desde otras tareas 
- * y escribirlos en el archivo de log usando el módulo de logger.
+ * @brief Loop principal de la tarea de logging.
+ *
+ * Inicializa el filesystem y la page cache. Luego consume mensajes
+ * de log_queue, los escribe en la cache (simulando page faults con
+ * LRU cuando se llena), y periodicamente vuelca todo a Flash.
  */
 void logger_task(void) {
     logger_init();
@@ -26,22 +45,12 @@ void logger_task(void) {
                 sys_sem_wait(&logger_sem);
                 log_cache_write(log_msg.text);
                 flush_counter++;
-                //logger_write(log_msg.text);
-                //char buf[64];
-                //snprintf(buf, sizeof(buf), "[LOG %d] %s\n", flush_counter, log_msg.text);
-//                sys_print(buf);
                 sys_sem_post(&logger_sem);
             }
         }
-        /*
-         * Flush periódico hacia Flash.
-         *
-         * Evita escribir Flash todo el tiempo.
-         */
         if (flush_counter >= 10) {
             sys_sem_wait(&logger_sem);
             log_flush_all();
-            //sys_print("[LOG] Cache flushed to Flash\n");
             sys_sem_post(&logger_sem);
             flush_counter = 0;
         }

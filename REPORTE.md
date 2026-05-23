@@ -1,291 +1,478 @@
-# Sistema de Riego Automático sobre PicoOS
+# Reporte: Sistema de Riego Automatico sobre PicoOS
 
-**Sistemas Operativos 2026-2 (0713)**
+## Laboratorio de Sistemas Operativos (0713)
 **Plataforma:** Raspberry Pi Pico (RP2040 - Dual-core ARM Cortex-M0+ @ 125MHz)
-**Repositorio:** https://github.com/jzarcoo/Sistema-de-Riego-Automatico-sobre-PicoOS
-**Video de funcionamiento:** https://canva.link/1fd4zm14b8c9oei
 
 ---
 
-## 1. Introducción
+## 1. Descripcion General
 
-El riego manual de plantas es una tarea que se olvida fácilmente y que, cuando se hace de forma ineficiente, desperdicia agua. Un sistema automático que mida la humedad del suelo y active el riego solo cuando es necesario resuelve ambos problemas. Sin embargo, construirlo sobre un microcontrolador sin sistema operativo resulta en código monolítico difícil de mantener y sin garantías de seguridad.
+Este proyecto implementa un sistema operativo minimalista (PicoOS) que gestiona un sistema de riego automatico. El diseno separa estrictamente el **plano de control critico** (tiempo real duro, Core 1) del **plano de gestion/usuario** (tiempo real blando, Core 0), aplicando conceptos avanzados de sistemas operativos sobre hardware bare-metal.
 
-Este proyecto aborda ese problema implementando un sistema operativo minimalista (PicoOS) sobre la Raspberry Pi Pico que gestiona el riego automático. El sistema lee un sensor de humedad, activa una bomba cuando el suelo está seco, permite riego manual por botón, muestra el estado en un LCD, y registra eventos en Flash. Todo esto corre sobre un kernel con separación de privilegios, protección de memoria por hardware, y planificación preemptiva en dos núcleos, demostrando que los conceptos de sistemas operativos tienen aplicación directa en sistemas embebidos reales.
-
----
-
-## 2. Objetivos
-
-- Implementar un kernel con planificación Round-Robin preemptiva sobre dos cores independientes.
-- Aplicar protección de memoria vía MPU para aislar tareas de usuario del hardware.
-- Demostrar IPC por paso de mensajes (productor-consumidor) sin variables compartidas.
-- Implementar page cache con reemplazo LRU y write-back diferido a Flash.
-- Construir un sistema de archivos minimalista sobre Flash (PicoFS).
-- Garantizar tolerancia a fallos: watchdog, HardFault handler, reinicio automático de tareas.
-- Demostrar la integración de múltiples subsistemas de SO en una aplicación funcional sobre hardware real.
+### Objetivos del Sistema
+- Monitorear humedad del suelo mediante sensor capacitivo (ADC).
+- Activar/desactivar bomba de riego automaticamente segun umbrales.
+- Permitir riego manual mediante boton fisico con debounce por hardware.
+- Registrar eventos en un sistema de archivos persistente sobre Flash.
+- Garantizar aislamiento de memoria y tolerancia a fallos.
 
 ---
 
-## 3. Marco Teórico
+## 2. Arquitectura del Sistema
 
-### 3.1 Planificación de Procesos
+### 2.1 Multiprocesamiento Asimetrico (Dual-Core)
 
-Un scheduler Round-Robin asigna un quantum fijo a cada tarea. Cuando el quantum expira, el scheduler preempta la tarea y selecciona la siguiente en estado READY. Se eligió Round-Robin porque las tareas del sistema (sensor, bomba, display, logger) tienen importancia similar y no requieren planificación por prioridad. En un sistema dual-core como el RP2040, cada core ejecuta su propio scheduler de forma independiente.
-
-### 3.2 Protección de Memoria
-
-La MPU (Memory Protection Unit) del ARM Cortex-M0+ permite definir regiones de memoria con permisos diferenciados entre modo privilegiado (kernel) y no privilegiado (tareas). Si una tarea viola los permisos, el hardware genera un HardFault. En este proyecto, la MPU es esencial para evitar que una tarea de usuario acceda directamente a periféricos críticos como la bomba o el bus I2C del display.
-
-### 3.3 Comunicación entre Procesos (IPC)
-
-El modelo productor-consumidor usa colas de mensajes tipados. Las tareas productoras envían mensajes a una cola y las consumidoras los extraen. Este esquema desacopla las tareas y evita condiciones de carrera sin necesidad de memoria compartida explícita. En nuestro caso, es la única forma segura de comunicar tareas que corren en cores distintos, ya que no comparten scheduler ni stack.
-
-### 3.4 Semáforos y Sincronización
-
-Los semáforos de conteo implementan una cola de espera FIFO: si el recurso no está disponible, la tarea se bloquea y se encola; al liberar el recurso, se despierta la primera tarea en espera. En este proyecto se usan como mutex (inicializados a 1) para garantizar exclusión mutua en el acceso a la bomba, el logger y el display, recursos que no deben ser manipulados por dos tareas simultáneamente.
-
-### 3.5 Page Cache y Políticas de Escritura
-
-Existen dos políticas principales de escritura en cache:
-
-- **Write-Through:** Escribe a cache y a disco simultáneamente. Seguro pero lento.
-- **Write-Back:** Escribe solo a cache. El disco se actualiza después (cuando la página es desalojada o hay flush). Rápido pero se pierden datos ante corte de energía.
-
-**Política elegida: Write-Back.** Se eligió Write-Back porque las operaciones de escritura a Flash en el RP2040 requieren pausar ambos cores (multicore lockout), lo cual es costoso. Con Write-Back, las escrituras se acumulan en RAM y se persisten de forma diferida desde el idle loop, minimizando las pausas del sistema. El riesgo de pérdida de datos ante corte de energía es aceptable porque los logs de riego no son críticos.
-
-**Algoritmo de reemplazo: LRU (Least Recently Used).** Cuando la cache está llena, se desaloja la página que no se ha usado por más tiempo.
-
-### 3.6 Sistemas de Archivos
-
-Un filesystem minimalista sobre Flash requiere considerar que Flash solo puede borrarse por sectores completos y programarse por páginas. Las operaciones de escritura necesitan read-modify-write. En un sistema multicore, las operaciones Flash deben pausar el otro core para evitar que ejecute código desde Flash mientras esta se reprograma.
-
-### 3.7 Tolerancia a Fallos
-
-El watchdog detecta tareas que dejaron de reportar actividad y las reinicia automáticamente. El HardFault handler atrapa violaciones de memoria y mata la tarea ofensora sin afectar al resto del sistema. La combinación de ambos mecanismos permite que el kernel sobreviva a fallos de tareas individuales, algo crítico en un sistema que controla hardware físico como una bomba de agua.
-
----
-
-## 4. Desarrollo
-
-### 4.1 Arquitectura Dual-Core
+El RP2040 posee dos cores Cortex-M0+ independientes. Se asignan asimetricamente:
 
 | Core | Rol | Tareas |
 |------|-----|--------|
-| Core 0 | Gestión, UI, logs | `logger_task`, `display_task`, `mpu_test_task` |
-| Core 1 | Control crítico, bomba, sensor | `irrigation_task`, `sensor_task`, `irrigation_update_task` |
+| Core 0 | Planificador general, UI, logs | `logger_task`, `display_task` |
+| Core 1 | Monitoreo critico, control de bomba | `irrigation_task`, `sensor_task`, `trigger_task`, `irrigation_task_update` |
 
-Cada core tiene su scheduler independiente con SysTick a 10ms. La separación no es arbitraria: el control de la bomba y la lectura del sensor están en Core 1 para garantizar que la latencia de I/O del display o del logger en Core 0 no afecte la respuesta del sistema de riego.
+Cada core ejecuta su propio scheduler Round-Robin independiente con SysTick a 10ms. No comparten planificador, lo que elimina la necesidad de locks complejos para el scheduling.
 
-**Comunicación inter-core:** Exclusivamente por colas de mensajes con deshabilitación de interrupciones para atomicidad.
+**Comunicacion entre cores:** Se realiza exclusivamente mediante colas de mensajes (`message_queue_t`) que usan deshabilitacion de interrupciones para atomicidad. No se usan spinlocks ni mutexes inter-core.
+
+### 2.2 Modelo de Comunicacion: Productor-Consumidor
 
 ```
-[sensor_task] --MSG_SOIL_DRY/WET----> [irrigation_queue] --> [irrigation_task]
-[sensor_task] --MSG_DISPLAY_TEXT----> [display_queue]    --> [display_task]
-[botón IRQ]   --MSG_MANUAL_TRIGGER--> [irrigation_queue] --> [irrigation_task]
-[irrigation_task] --MSG_LOG_TEXT-----> [log_queue]        --> [logger_task]
-[irrigation_task] --MSG_DISPLAY_TEXT-> [display_queue]    --> [display_task]
+[sensor_task] --MSG_SOIL_DRY/WET--> [irrigation_queue] --> [irrigation_task]
+[boton IRQ]   --MSG_MANUAL_TRIGGER-> [irrigation_queue] --> [irrigation_task]
+[irrigation_task] --MSG_LOG_TEXT----> [log_queue]        --> [logger_task]
+[irrigation_task] --MSG_DISPLAY_TEXT-> [display_queue]   --> [display_task]
 ```
 
-### 4.2 Memory Protection Unit (MPU)
+Las tareas se comunican unicamente por paso de mensajes tipados, evitando variables compartidas y condiciones de carrera.
 
-Se configuraron 5 regiones:
+### 2.3 Flujo de Interrupciones
 
-| Región | Dirección | Tamaño | Acceso | Protege |
-|--------|-----------|--------|--------|---------|
-| 0 | 0x00000000 | 4GB | Full | Background (ROM, RAM, SIO) |
-| 1 | 0x40014000 | 16KB | Solo kernel | IO_BANK0: función de pin |
-| 2 | 0x4001C000 | 4KB | Solo kernel | PADS_BANK0: config eléctrica |
-| 3 | 0x40044000 | 4KB | Solo kernel | I2C0: bus LCD |
-| 4 | 0x40034000 | 4KB | Solo kernel | UART0: serial output |
+```
+GPIO Pin 14 (rising edge)
+    |
+    v
+IO_IRQ_BANK0 (NVIC Core 1)
+    |
+    v
+gpio_irq_dispatcher() [ISR]
+    |-- debounce check (1000ms)
+    |-- gpio_acknowledge_irq()
+    |-- mq_send_from_isr(&irrigation_queue, MSG_MANUAL_TRIGGER)
+    v
+irrigation_task consume el mensaje
+```
 
-Si una tarea de usuario intenta acceder a estos periféricos directamente, la MPU genera HardFault. El handler mata la tarea y el sistema continúa operando.
+---
 
-**Nota sobre SIO (0xD0000000):** No se protege porque contiene el registro CPUID que el Pico SDK consulta desde `get_core_num()` en muchas funciones internas. La MPU del M0+ no permite proteger parte de un bloque. La bomba se protege indirectamente con IO_BANK0: sin acceso a IO_BANK0, una tarea no puede reconfigurar el pin de la bomba.
+## 3. Administracion de Recursos del Microcontrolador
 
-**PRIVDEFENA=1:** El modo privilegiado tiene acceso total. Las tareas acceden a periféricos únicamente vía syscalls.
+### 3.1 Memory Protection Unit (MPU)
 
-### 4.3 Planificador
+La MPU del RP2040 (8 regiones) se configura en su propio modulo (`mpu.c`) para aislar el kernel de las tareas de usuario:
 
-- Round-Robin preemptivo con quantum de 10 ticks (100ms).
-- Conmutación de contexto vía PendSV.
-- Estados posibles: DORMANT, READY, RUNNING, BLOCKED.
-- Stack de 512 words (2KB) por tarea.
-- El scheduler guarda R4-R11 manualmente porque el Cortex-M0+ no tiene instrucción STMDB.
+| Region | Direccion Base | Tamano | Acceso | Proposito |
+|--------|---------------|--------|--------|-----------|
+| 0 | 0x00000000 | 4GB | Full (priv+unpriv) | Background: ROM, Flash, RAM, SIO |
+| 1 | 0x40014000 | 16KB | Solo privilegiado | IO_BANK0: registros GPIO (bomba) |
+| 2 | 0x4001C000 | 4KB | Solo privilegiado | PADS_BANK0: config electrica pines |
+| 3 | 0x40044000 | 4KB | Solo privilegiado | I2C0: bus del display LCD |
 
-### 4.4 Syscalls
+**Secuencia de boot:** Los managers de hardware inicializan los perifericos *antes* de activar la MPU. Una vez activa, las tareas de usuario solo pueden acceder a perifericos protegidos mediante syscalls que ejecutan en modo privilegiado.
 
-El kernel expone 17 servicios vía instrucción SVC:
+**Efecto:** Las tareas corren en modo no privilegiado (CONTROL.nPRIV=1). Si `display_task` o cualquier tarea de usuario intenta escribir directamente en un registro GPIO o I2C, la MPU genera un HardFault. El handler mata la tarea sin afectar al kernel ni al plano de control.
+
+**PRIVDEFENA=1:** El modo privilegiado (kernel, handlers, managers) tiene acceso total al mapa de memoria por defecto.
+
+### 3.2 Planificador (Scheduler)
+
+- **Algoritmo:** Round-Robin preemptivo con quantum fijo de 10 ticks (100ms).
+- **Conmutacion de contexto:** Via PendSV (prioridad mas baja), disparado por SysTick o syscalls bloqueantes.
+- **Estados de tarea:** DORMANT, READY, RUNNING, BLOCKED.
+- **Stack por tarea:** 512 words (2KB) dedicados, separados del MSP del kernel.
+
+El scheduler guarda/restaura registros R4-R11 por software (Cortex-M0+ no tiene instrucciones STMDB como M3/M4) y el hardware guarda R0-R3, R12, LR, PC, xPSR automaticamente en el exception frame.
+
+### 3.3 Syscalls (Llamadas al Sistema)
+
+Las tareas en modo no privilegiado acceden a servicios del kernel mediante la instruccion `SVC`:
 
 ```
 Tarea (unprivileged, PSP)
-    | SVC #0 (r7 = id, r0-r3 = args)
+    |
+    | SVC #0 (r7 = syscall_id, r0-r3 = args)
     v
-wrapper_svc [ASM] -> extrae args del stack frame
+wrapper_svc [ASM] -> determina PSP/MSP, extrae args
+    |
     v
-kernel_service() [C] -> despacha (GPIO, ADC, semáforos, sleep, print, etc.)
+kernel_service() [C] -> despacha al servicio (privilegiado)
+    |
     v
 Retorno a tarea (resultado en r0)
 ```
 
-### 4.5 Subsistema de I/O
+Servicios disponibles: GPIO set/get/dir, semaforos, ADC, bomba, sleep, heartbeat, print, display update.
 
-La jerarquía de acceso a hardware sigue el patrón clásico de SO:
+### 3.4 Subsistema de Entrada/Salida (I/O)
+
+El kernel implementa una jerarquia de I/O inspirada en sistemas operativos reales (Silberschatz cap. 13):
 
 ```
-User Task --> syscall --> Device Manager --> Device Driver --> Hardware
+User Task (unprivileged)
+    |
+    | syscall (SVC)
+    v
+Kernel Service (dispatcher)
+    |
+    v
+Device Manager (irrigation_manager, display_manager)
+    |
+    v
+Device Driver (kernel_drivers: GPIO, ADC, I2C)
+    |
+    v
+Hardware (RP2040 peripherals)
 ```
 
-| Periférico | Técnica | Justificación |
+**Tecnicas de I/O implementadas:**
+
+| Periferico | Tecnica | Justificacion |
 |-----------|---------|---------------|
-| ADC (sensor) | Polling cada 5s | La conversión tarda ~2μs, no justifica interrupt |
-| GPIO botón | IRQ + triple sampling + debounce 500ms | Evento asincrónico, filtra EMI del relay |
-| GPIO bomba | Write directo (SIO) | Un ciclo de reloj, no requiere buffering |
-| I2C LCD | Double buffer + diff + batch por fila | Solo envía filas modificadas, ahorra bus |
-| UART | sys_print (MPU protege UART0) | Fuerza uso de syscall para serializar acceso |
+| ADC (sensor humedad) | Polling | Lectura cada 5s, conversion de ~2us. No justifica interrupt. |
+| GPIO boton | Interrupts (IRQ) | Evento asincronico, el CPU no debe encuestar continuamente. |
+| GPIO bomba | Write directo | Operacion instantanea, un ciclo de reloj. |
+| I2C display LCD | Double buffer + diff | Solo envia filas modificadas; reduce trafico I2C. |
 
-Para el **Display LCD 2004A** se implementó un driver HD44780 vía PCF8574T a 400kHz con double buffer (front/back), diff por fila con memcmp, y batch I2C. El driver es tolerante a desconexión: si el timeout I2C se dispara, se desactiva sin afectar al resto del sistema.
+**Double Buffer con Diff (Display LCD):**
 
-### 4.6 Semáforos
+El display manager mantiene dos buffers de texto (20x4 caracteres cada uno):
+- `back_buf`: donde se compone el proximo frame.
+- `front_buf`: copia de lo que el LCD muestra actualmente.
 
-Se implementaron 3 mutex (semáforos inicializados a 1):
-- `irrigation_pump_sem`: Exclusión mutua para la bomba.
-- `logger_sem`: Exclusión mutua para operaciones de Flash.
-- `display_sem`: Exclusión mutua para el LCD.
+Al actualizar, se comparan fila por fila. Solo las filas que cambiaron se reescriben via I2C. Esto reduce el trafico de 80 bytes (4 filas completas) a solo las filas modificadas.
 
-Cada semáforo tiene una cola de espera FIFO. El timeout por watchdog detecta posibles deadlocks: si una tarea permanece bloqueada más de 5 segundos, se considera colgada.
+**Por que no DMA:**
 
-### 4.7 Page Cache LRU + Write-Back Diferido
+El LCD 2004A usa un controlador HD44780 accesible via expansor I2C PCF8574 en modo 4-bit. Cada caracter requiere 4 transacciones I2C separadas (high nibble + enable pulse + low nibble + enable pulse) con timing critico entre ellas. DMA es eficiente para transferencias bulk continuas (como un framebuffer OLED), pero no para protocolos conversacionales donde el CPU debe orquestar cada paso.
 
-La cache consta de 6 frames de 64 bytes en RAM con política Write-Back:
+**Display LCD 2004A (JHD-204A):**
 
-1. **Hit:** Se escribe en el frame correspondiente y se marca como dirty.
-2. **Miss (cache llena):** LRU selecciona la víctima. Si está dirty, se encola en `flash_work_queue`.
-3. **Flush periódico (cada 50 mensajes):** Se encolan todas las páginas dirty.
-4. **Write-Back:** El idle loop del kernel drena la cola y escribe a Flash en modo privilegiado (thread mode).
+Driver del controlador HD44780 via PCF8574T a 100kHz. Soporta:
+- Inicializacion del modo 4-bit segun datasheet HD44780.
+- Escritura de texto con el charset integrado del LCD (ASCII completo).
+- 20 caracteres x 4 lineas con backlight controlable.
+- Auto-deteccion de direccion I2C (scan 0x27, 0x3F).
 
-El flush diferido evita deadlock inter-core: las operaciones de Flash necesitan `multicore_lockout`, que requiere que Core 1 responda a una IRQ FIFO. Si Core 1 está en SVC handler, no puede responder. El idle loop corre en thread mode donde Core 1 siempre puede atender el lockout.
+### 3.5 Semaforos
 
-### 4.8 Sistema de Archivos (PicoFS)
+Primitivas del kernel, creadas durante el boot y expuestas a user tasks via syscall. Semaforos de conteo con cola de espera FIFO (hasta 10 tareas). Usados como mutex (inicializados a 1) para:
+- `irrigation_pump_sem`: Exclusion mutua para activar la bomba.
+- `logger_sem`: Exclusion mutua para escritura en Flash.
+- `display_sem`: Exclusion mutua para el display OLED.
 
-Se implementó un filesystem plano sobre Flash:
-- Tabla de metadatos en un sector dedicado, con datos contiguos a continuación.
-- Operaciones soportadas: create, read, write, append, delete, compact, format.
-- Seguridad multicore: cada operación Flash usa `multicore_lockout` + deshabilitación de interrupciones.
-- Las lecturas se realizan vía XIP (Execute-In-Place), accediendo directamente al mapa de memoria.
+Cuando una tarea hace `k_sem_wait` y el recurso no esta disponible, se bloquea (BLOCKED) y se encola. Al hacer `k_sem_post`, se despierta la primera tarea en espera.
 
-### 4.9 Tolerancia a Fallos
+### 3.6 Simulacion de Memoria Virtual (Page Cache LRU)
 
-**Watchdog:** Cada tarea reporta `sys_heartbeat()` periódicamente. Si no reporta en 500 ticks (5 segundos), el supervisor la reinicia con un stack fresco.
+El modulo `log_memory.c` implementa un buffer de 6 paginas en RAM que simula una cache de memoria:
 
-**HardFault Handler:** Ante una violación de MPU, identifica la tarea y el PC ofensor, marca la tarea como DORMANT, y dispara PendSV para que el scheduler continúe con la siguiente tarea.
+1. **Page Hit:** El log se escribe en un frame libre disponible.
+2. **Page Fault:** No hay frames libres. Se aplica LRU (Least Recently Used):
+   - Se busca la pagina con menor `last_use`.
+   - Si esta dirty (modificada), se vuelca a Flash via `logger_write()`.
+   - Se reutiliza el frame para el nuevo mensaje.
+3. **Flush periodico:** Cada 10 mensajes, `log_flush_all()` vuelca todas las paginas dirty.
 
-**Protección de la bomba:** Se implementó un timeout máximo de 25 segundos, un tiempo mínimo de 3 segundos entre activaciones, y un pull-down en el pin GPIO para que un pin flotante siempre signifique bomba apagada.
+Esto simula el comportamiento de un subsistema de memoria virtual con algoritmos de reemplazo de paginas.
 
-### 4.10 Manejo de Flash Multicore
+### 3.7 Sistema de Archivos (PicoFS)
 
-El RP2040 comparte la Flash entre ambos cores. Durante una operación de escritura o borrado, el XIP se desactiva y ningún core puede ejecutar código desde Flash. Esto requiere pausar Core 1 vía `multicore_lockout`.
+Filesystem plano sobre los ultimos sectores de Flash del RP2040:
 
-**Problema:** Si Core 1 está dentro del SVC handler cuando Core 0 solicita el lockout, la FIFO IRQ no puede interrumpirlo (misma prioridad en Cortex-M0+), causando un deadlock.
+- **Estructura:** Tabla de metadatos (1 sector) + datos contiguos.
+- **Operaciones:** create, read, write, append, delete (logico), compact, format.
+- **Seguridad multicore:** Toda operacion Flash pausa Core 1 (`multicore_lockout`) y deshabilita interrupciones.
+- **Lectura XIP:** Los datos se leen directamente del mapa de memoria (Execute-In-Place) sin operaciones especiales.
 
-**Solución implementada:** Write-back diferido con timeout.
-1. Las páginas dirty del page cache se encolan en `flash_work_queue` (RAM).
-2. El idle loop del kernel (thread mode, Core 0) drena la cola.
-3. `multicore_lockout_start_timeout_us(50ms)` reemplaza la versión blocking.
-4. Si el timeout expira (Core 1 en SVC), se reintenta en la siguiente iteración.
+### 3.8 Tolerancia a Fallos
 
-Esto garantiza que el sistema nunca se congela por una operación de Flash.
+#### Watchdog por Heartbeat
+Cada tarea debe llamar `sys_heartbeat()` periodicamente. El SysTick verifica en cada tick:
+- Si una tarea RUNNING no reporta heartbeat en 500 ticks (5 seg): **se reinicia automaticamente**.
+- Si una tarea BLOCKED (en semaforo, posible deadlock) excede el timeout: se marca DORMANT y se reinicia con stack fresco.
 
-### 4.11 Uso del SDK
+#### HardFault Handler
+Cuando una tarea genera un HardFault (violacion MPU, instruccion invalida):
+1. Identifica la tarea ofensora y el PC de la falla.
+2. Marca la tarea como DORMANT (la mata).
+3. Dispara PendSV para cambiar a la siguiente tarea.
+4. NO causa kernel panic — el sistema continua operando.
 
-| Biblioteca | Uso |
-|-----------|-----|
-| `pico_stdlib` | Boot, USB, clocks |
-| `pico_multicore` | Core 1 launch, lockout |
-| `hardware_adc` | Sensor humedad |
-| `hardware_i2c` | LCD |
-| `hardware_flash` | Erase/program (relocado a RAM) |
-| `hardware_exception` | Registro de handlers |
-| `hardware_sync` | Atomicidad (PRIMASK) |
-| `hardware_irq` | NVIC GPIO |
-
-El código nativo (sin SDK) incluye: GPIO driver, scheduler, PendSV/SVC handlers, MPU y syscalls.
-
----
-
-## 5. Resultados
-
-### 5.1 Funcionamiento del Sistema
-
-El sistema opera correctamente en todas las condiciones probadas:
-- El sensor lee humedad cada 5 segundos y envía MSG_SOIL_DRY o MSG_SOIL_WET a la cola de irrigación.
-- La bomba se activa cuando el suelo está seco (ADC > 2500) y se apaga automáticamente al detectar humedad suficiente.
-- El botón manual dispara un ciclo de riego de ~4 segundos, independiente del sensor.
-- El display LCD muestra en tiempo real la humedad, el estado de la bomba y el último evento registrado.
-- Los logs se persisten a Flash vía page cache LRU sin bloquear el sistema.
-- La demo de MPU genera un HardFault controlado y el sistema sobrevive sin reiniciarse.
-- El watchdog detecta y reinicia tareas colgadas de forma transparente.
-
-### 5.2 Problemas Encontrados y Soluciones
-
-**1. EMI del relay en GPIO del botón:**
-El relay genera ruido electromagnético al conmutar que activa GPIO 14 falsamente. Solución: triple sampling en ISR (3 lecturas con ~1ms entre cada una) + debounce de 500ms + drain de mensajes post-riego.
-
-**2. Deadlock inter-core por Flash lockout:**
-`multicore_lockout_start_blocking()` espera que Core 1 responda vía FIFO IRQ. Si Core 1 está en SVC handler, la IRQ no puede interrumpirlo (misma prioridad en M0+). Solución: write-back diferido (las escrituras a Flash se encolan y se ejecutan desde el idle loop) + `multicore_lockout_start_timeout_us(50ms)` que reintenta sin bloquear el sistema.
-
-**3. SIO no protegible por MPU:**
-El bloque SIO (0xD0000000) contiene CPUID que el SDK usa internamente. Proteger SIO completo causa HardFault en funciones básicas del SDK. La MPU del M0+ no permite proteger sub-bloques. Solución: proteger IO_BANK0 (que controla la función del pin) en vez de SIO directamente.
-
-**4. printf en ISR/SVC handler:**
-`printf` usa UART que es bloqueante. Dentro de un ISR o SVC handler, bloquea el sistema entero. Solución: las tareas usan `sys_print` (syscall) y el ISR no imprime nada.
+#### Proteccion de la Bomba
+- Timeout maximo de bombeo (25 seg): previene inundacion.
+- Tiempo minimo de bombeo (3 seg): previene ciclos cortos daninos para el motor.
+- Pull-down en pin de bomba: si el pin flota, la bomba permanece apagada.
 
 ---
 
-## 6. Conclusiones
+## 4. Uso de Bibliotecas del SDK
 
-Este proyecto demostró que los conceptos teóricos de sistemas operativos no son abstracciones académicas: se aplican directamente sobre hardware real con restricciones concretas. La planificación Round-Robin, la protección de memoria por MPU, la comunicación por colas de mensajes, y la persistencia con page cache LRU operan sobre el microcontrolador cumpliendo requisitos de tiempo real.
+### Bibliotecas Utilizadas
 
-Las restricciones del hardware (M0+ sin MMU, prioridades fijas de excepciones, Flash compartida entre cores) obligaron a tomar decisiones de diseño que no aparecen en los libros de texto: el write-back diferido para evitar deadlock, la imposibilidad de proteger SIO, y el filtrado de EMI por software. Estos son problemas que solo se descubren al implementar sobre hardware físico y que enriquecieron significativamente el aprendizaje.
+| Biblioteca | Uso | Justificacion |
+|-----------|-----|---------------|
+| `pico_stdlib` | Inicializacion de sistema, USB serial, sleep durante boot | Configura clocks, PLLs y USB que requieren secuencias complejas de inicializacion no triviales de reimplementar. |
+| `pico_multicore` | Lanzamiento de Core 1, lockout para Flash | El protocolo de lanzamiento del segundo core requiere mailbox FIFO del SIO; reimplementar seria propenso a errores. |
+| `hardware_adc` | Lectura del sensor de humedad | El ADC del RP2040 requiere calibracion interna y secuencias de muestreo especificas. |
+| `hardware_i2c` | Comunicacion con LCD 2004A via PCF8574 | El periferico I2C requiere manejo de FIFO, ACK/NAK y clock stretching a nivel de hardware. |
+| `hardware_exception` | Registro de handlers (SVC, PendSV, HardFault) | Modifica la tabla de vectores en RAM de forma segura. |
+| `hardware_flash` | Erase/program de sectores Flash | Las operaciones de Flash requieren ejecutar desde RAM (XIP se desactiva); el SDK provee funciones relocadas. |
+| `hardware_sync` | `save_and_disable_interrupts` / `restore_interrupts` | Operaciones atomicas sobre el registro PRIMASK. |
+| `hardware_irq` | Configuracion de IRQ GPIO | Configuracion segura de la NVIC. |
+| `hardware_gpio` | Configuracion I2C pin function | El SDK maneja la multiplexacion de funciones de pin. |
 
-Lo más desafiante fue el deadlock inter-core por Flash lockout, porque no era reproducible de forma determinista y requirió entender a fondo el modelo de interrupciones del Cortex-M0+. La solución (flush diferido desde el idle loop) es un patrón que se usa en kernels reales y fue satisfactorio llegar a ella por necesidad.
+### Ventajas del SDK vs. Implementacion Propia
+
+**Ventajas del SDK:**
+- Secuencias de inicializacion validadas (clocks, PLL, USB).
+- Operaciones Flash relocadas a RAM (imposible desde Flash).
+- Compatibilidad con futuras revisiones del chip.
+
+**Desventajas del SDK:**
+- Abstraccion oculta detalles del hardware.
+- Mayor tamano de binario.
+- Dependencia externa.
+
+### Codigo Nativo (Sin SDK)
+
+Los siguientes modulos acceden directamente a registros sin usar el SDK:
+- **GPIO driver** (`kernel_drivers.c`): Acceso directo a SIO, IO_BANK0, PADS_BANK0.
+- **Scheduler** (`scheduler.c`): Manipulacion directa de SysTick, CONTROL, PSP.
+- **PendSV/SVC handlers** (`pendsv.s`, `svc_handler.s`): Ensamblador ARM puro.
+- **MPU** (`mpu.c`): Configuracion directa de registros de la Memory Protection Unit.
+- **Syscalls** (`syscalls.s`): Instrucciones SVC en ensamblador.
 
 ---
 
-## 7. Conexionado Físico
-
-| Componente | GPIO | Pin Pico | Notas |
-|-----------|------|----------|-------|
-| Bomba (relé) | 6 | Pin 9 | Activa en LOW, pull-down |
-| Sensor humedad | 26 (ADC0) | Pin 31 | Analógico |
-| Botón manual | 14 | Pin 19 | Pull-down, rising edge |
-| LCD SDA | 8 | Pin 11 | I2C0, PCF8574 |
-| LCD SCL | 9 | Pin 12 | I2C0, 400kHz |
-
----
-
-## 8. Estructura del Proyecto
+## 5. Estructura del Proyecto
 
 ```
+Sistema-de-Riego-Automatico-sobre-PicoOS/
+├── CMakeLists.txt              # Configuracion de build
+├── pico_sdk_import.cmake       # Integracion del Pico SDK
 ├── include/
-│   ├── kernel/          # scheduler, mpu, syscalls, drivers, events, queues
-│   ├── filesystem.h     # PicoFS API
-│   ├── flash_queue.h    # Cola write-back diferido
-│   ├── log_memory.h     # Page cache LRU
-│   └── logger.h         # Logger persistente
+│   ├── kernel/
+│   │   ├── mpu.h              # Memory Protection Unit
+│   │   ├── display_manager.h  # Driver OLED SSD1306 (I2C)
+│   │   ├── irrigation_manager.h # Driver de riego (bomba/sensor)
+│   │   ├── scheduler.h        # TCB, estados, scheduler por core
+│   │   ├── semaphore.h        # Semaforos con cola FIFO
+│   │   ├── syscalls.h         # Interfaz de syscalls
+│   │   ├── kernel_drivers.h   # Drivers GPIO/ADC bare-metal
+│   │   ├── kernel_events.h    # Eventos GPIO por IRQ
+│   │   ├── message_queue.h    # Colas de mensajes IPC
+│   │   └── watchdog_supervisor.h # Heartbeat watchdog
+│   ├── kernel_hw_config.h     # Mapa de pines de hardware
+│   ├── filesystem.h           # PicoFS API
+│   ├── log_memory.h           # Page cache LRU
+│   ├── logger.h               # Logger persistente
+│   └── user_app.h             # Recursos compartidos de usuario
 ├── src/
-│   ├── main.c           # Boot dual-core, idle loop (flash worker)
-│   ├── arch/            # pendsv.s, svc_handler.s, syscalls.s
-│   ├── kernel/          # scheduler, mpu, drivers, filesystem, flash_queue
-│   └── user/tasks/      # irrigation, sensor, logger, display, mpu_test
-└── CMakeLists.txt
+│   ├── main.c                 # Kernel boot, dual-core init
+│   ├── arch/
+│   │   ├── pendsv.s           # Context switch (PendSV handler)
+│   │   ├── svc_handler.s      # SVC dispatcher (ASM)
+│   │   └── syscalls.s         # Syscall stubs (ASM)
+│   ├── kernel/
+│   │   ├── mpu.c             # Configuracion de regiones MPU
+│   │   ├── display_manager.c # Driver OLED: double buffer, I2C
+│   │   ├── irrigation_manager.c # Maquina de estados bomba
+│   │   ├── scheduler.c       # Planificador Round-Robin
+│   │   ├── semaphore.c       # Implementacion de semaforos
+│   │   ├── kernel_service.c  # Despachador de syscalls (C)
+│   │   ├── kernel_drivers.c  # Drivers bare-metal GPIO/ADC
+│   │   ├── kernel_events.c   # Sistema de eventos GPIO
+│   │   ├── message_queue.c   # Colas de mensajes
+│   │   ├── watchdog_supervisor.c # Heartbeat
+│   │   ├── filesystem.c      # PicoFS (Flash filesystem)
+│   │   ├── log_memory.c      # Page cache con LRU
+│   │   └── logger.c          # Persistencia de logs
+│   └── user/
+│       ├── user_app.c         # Recursos globales (sems, colas)
+│       └── tasks/
+│           ├── irrigation_task.c # Consumidor de cola de riego
+│           ├── sensor_task.c     # Lectura periodica ADC
+│           ├── trigger_task.c    # Heartbeat para boton manual
+│           ├── logger_task.c     # Consumidor de cola de logs
+│           └── display_task.c    # Consumidor de cola display
 ```
 
 ---
 
-## 9. Referencias
+## 6. Guia de Compilacion y Carga
 
-- Silberschatz, A., Galvin, P., Gagne, G. *Operating System Concepts* (10th Edition). Wiley, 2018.
-- Raspberry Pi Ltd. *RP2040 Datasheet*. 2021.
-- Raspberry Pi Ltd. *Raspberry Pi Pico C/C++ SDK Documentation*. 2021.
-- ARM Ltd. *ARMv6-M Architecture Reference Manual*. 2017.
+### Requisitos
+
+- **Pico SDK** (v1.5+): [github.com/raspberrypi/pico-sdk](https://github.com/raspberrypi/pico-sdk)
+- **ARM GCC Toolchain** (`arm-none-eabi-gcc` 10+)
+- **CMake** (3.13+)
+- **Python 3** (para herramientas del SDK)
+
+### Compilacion
+
+```bash
+# 1. Clonar el repositorio
+git clone <url-del-repo> && cd Sistema-de-Riego-Automatico-sobre-PicoOS
+
+# 2. Configurar variable de entorno del SDK
+export PICO_SDK_PATH=/ruta/al/pico-sdk
+
+# 3. Crear directorio de build y compilar
+mkdir build && cd build
+cmake ..
+make -j4
+
+# 4. El binario resultante es:
+#    build/ProyectoFinal.uf2
+```
+
+### Carga en la Raspberry Pi Pico
+
+1. **Conectar la Pico en modo BOOTSEL:**
+   - Mantener presionado el boton BOOTSEL de la Pico.
+   - Conectar el cable USB al computador.
+   - Soltar el boton. Aparecera como unidad USB `RPI-RP2`.
+
+2. **Copiar el firmware:**
+   ```bash
+   cp build/ProyectoFinal.uf2 /Volumes/RPI-RP2/    # macOS
+   # o
+   cp build/ProyectoFinal.uf2 /media/$USER/RPI-RP2/ # Linux
+   ```
+
+3. **La Pico se reinicia automaticamente** y comienza a ejecutar PicoOS.
+
+### Conexion Serial (Debug)
+
+```bash
+# macOS
+screen /dev/tty.usbmodem* 115200
+
+# Linux
+minicom -D /dev/ttyACM0 -b 115200
+```
+
+### Conexionado Fisico
+
+| Componente | Pin Pico | GPIO | Notas |
+|-----------|----------|------|-------|
+| Bomba (rele) | Pin 9 | GPIO 6 | Salida, pull-down, activa en LOW |
+| Sensor humedad | Pin 31 | GPIO 26 (ADC0) | Entrada analogica |
+| Boton manual | Pin 21 | GPIO 16 | Entrada, pull-up, rising edge |
+| LCD SDA | Pin 6 | GPIO 4 | I2C0 Data (LCD 2004A) |
+| LCD SCL | Pin 7 | GPIO 5 | I2C0 Clock (LCD 2004A) |
+
+---
+
+## 7. Conceptos de SO Implementados
+
+| Concepto | Implementacion | Archivo(s) |
+|----------|---------------|------------|
+| Planificacion de procesos | Round-Robin preemptivo por core | `scheduler.c`, `pendsv.s` |
+| Cambio de contexto | PendSV con save/restore manual R4-R11 | `pendsv.s` |
+| Llamadas al sistema | SVC trap + dispatcher | `syscalls.s`, `svc_handler.s`, `kernel_service.c` |
+| Proteccion de memoria | MPU con regiones privilegiadas | `mpu.c` |
+| Modo dual (kernel/user) | CONTROL.nPRIV + PSP/MSP | `pendsv.s`, `scheduler.c` |
+| Multiprocesamiento | Dual-core asimetrico | `main.c:core1_entry()` |
+| IPC por mensajes | Colas circulares thread-safe | `message_queue.c` |
+| Sincronizacion | Semaforos de conteo con cola FIFO | `semaphore.c` |
+| Interrupciones de HW | GPIO IRQ con debounce y dispatch | `kernel_events.c` |
+| Entrada/Salida | Jerarquia: syscall -> manager -> driver -> HW | `kernel_service.c`, managers |
+| Double buffer + diff | Buffers duales, solo reescribe filas modificadas | `display_manager.c` |
+| Memoria virtual (sim.) | Page cache con reemplazo LRU | `log_memory.c` |
+| Sistema de archivos | Filesystem plano sobre Flash | `filesystem.c` |
+| Tolerancia a fallos | Watchdog heartbeat + HardFault handler | `watchdog_supervisor.c`, `main.c` |
+| Deteccion de deadlock | Timeout en tareas BLOCKED sin wake_tick | `scheduler.c:isr_systick()` |
+
+---
+
+## 8. Diagrama de Arquitectura de Procesos
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              HARDWARE (RP2040)                           │
+├─────────────────────────────────┬───────────────────────────────────────┤
+│          CORE 0                 │              CORE 1                    │
+│   (Gestion / UI / Logs)        │     (Control Critico / RT Duro)        │
+├─────────────────────────────────┼───────────────────────────────────────┤
+│                                 │                                        │
+│  ┌──────────────────────────┐   │   ┌──────────────────────────┐        │
+│  │    SysTick (10ms)        │   │   │    SysTick (10ms)        │        │
+│  │    Scheduler Core 0      │   │   │    Scheduler Core 1      │        │
+│  │    Watchdog Check        │   │   │    Watchdog Check        │        │
+│  └──────────┬───────────────┘   │   └──────────┬───────────────┘        │
+│             │                   │              │                         │
+│  ┌──────────▼───────────────┐   │   ┌──────────▼───────────────┐        │
+│  │ logger_task              │   │   │ irrigation_task           │        │
+│  │ - Consume log_queue      │   │   │ - Consume irrigation_queue│        │
+│  │ - Page cache LRU         │   │   │ - Despacha riego         │        │
+│  │ - Flush a Flash          │   │   │ - Envia a log/display    │        │
+│  └──────────────────────────┘   │   └──────────────────────────┘        │
+│                                 │                                        │
+│  ┌──────────────────────────┐   │   ┌──────────────────────────┐        │
+│  │ display_task             │   │   │ sensor_task              │        │
+│  │ - Consume display_queue  │   │   │ - Lee ADC cada 5s        │        │
+│  │ - Muestra en serial/OLED │   │   │ - Envia DRY/WET a cola   │        │
+│  └──────────────────────────┘   │   └──────────────────────────┘        │
+│                                 │                                        │
+│                                 │   ┌──────────────────────────┐        │
+│                                 │   │ trigger_task             │        │
+│                                 │   │ - Heartbeat (boton por   │        │
+│                                 │   │   IRQ directa)           │        │
+│                                 │   └──────────────────────────┘        │
+│                                 │                                        │
+│                                 │   ┌──────────────────────────┐        │
+│                                 │   │ irrigation_task_update   │        │
+│                                 │   │ - Maquina de estados     │        │
+│                                 │   │   bomba ON/OFF           │        │
+│                                 │   └──────────────────────────┘        │
+├─────────────────────────────────┴───────────────────────────────────────┤
+│                          KERNEL (Privilegiado)                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│  MPU: IO_BANK0 + PADS_BANK0 protegidos (solo kernel)                   │
+│  SVC Handler -> kernel_service() -> GPIO, ADC, Semaforos, Sleep         │
+│  HardFault Handler -> mata tarea, PendSV, continua                      │
+│  Flash ops: multicore_lockout + disable interrupts                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│                         COMUNICACION (IPC)                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│  irrigation_queue: sensor/boton -> irrigation_task (inter-core)         │
+│  log_queue:        irrigation_task -> logger_task                        │
+│  display_queue:    irrigation_task -> display_task                       │
+│  Semaforos:        irrigation_pump_sem, logger_sem, display_sem          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Zonas de Memoria Protegidas por MPU
+
+```
+0x00000000 ┬─────────────────────────────┐
+           │ Flash (codigo + XIP FS)     │ Region 0: Full Access
+0x10000000 │ XIP Base                    │
+           ├─────────────────────────────┤
+0x20000000 │ SRAM (stacks, variables)    │ Region 0: Full Access
+           ├─────────────────────────────┤
+0x40014000 │ IO_BANK0 (GPIO ctrl)       │ Region 1: SOLO KERNEL
+0x40018000 ├─────────────────────────────┤
+0x4001C000 │ PADS_BANK0 (pad config)    │ Region 2: SOLO KERNEL
+0x4001D000 ├─────────────────────────────┤
+0x40044000 │ I2C0 (bus display LCD)     │ Region 3: SOLO KERNEL
+0x40045000 ├─────────────────────────────┤
+           │ Otros perifericos           │ Region 0: Full Access
+0xD0000000 │ SIO (acceso directo GPIO)   │ Region 0: Full Access
+           └─────────────────────────────┘
+```
+
+---
+
+## 9. Conclusiones
+
+El sistema implementa un RTOS funcional con separacion de privilegios, aislamiento de memoria, comunicacion por mensajes, y tolerancia a fallos, todo sobre un microcontrolador de $4 USD. Los conceptos de sistemas operativos (scheduling, IPC, proteccion de memoria, filesystem, manejo de interrupciones) se aplican de forma tangible sobre hardware real, demostrando que los principios teoricos del curso tienen impacto directo en la confiabilidad y seguridad de sistemas embebidos.

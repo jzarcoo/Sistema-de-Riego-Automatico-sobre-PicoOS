@@ -1,3 +1,19 @@
+/**
+ * @file kernel_drivers.c
+ * @brief Drivers de bajo nivel para GPIO y ADC (acceso directo a registros).
+ *
+ * Provee la capa de abstraccion de hardware a nivel kernel. Accede
+ * directamente a los registros SIO, IO_BANK0 y PADS_BANK0 del RP2040
+ * para controlar pines GPIO sin depender de la HAL del SDK (excepto ADC).
+ * Estos drivers solo son accesibles desde modo privilegiado; las tareas
+ * de usuario deben usar syscalls para interactuar con el hardware.
+ *
+ * Registros utilizados:
+ * - SIO (0xD0000000): Control rapido de salida/entrada GPIO.
+ * - IO_BANK0 (0x40014000): Seleccion de funcion de pin (SIO, UART, etc).
+ * - PADS_BANK0 (0x4001C000): Configuracion electrica (pull-up/down).
+ */
+
 #include <stdint.h>
 #include <stdio.h>
 #include "pico/multicore.h"
@@ -5,44 +21,35 @@
 #include "hardware/irq.h"
 #include "kernel_hw_config.h"
 
-/* SIO base address for GPIO control on the RP2040 */
-//#define SIO_BASE 0xd0000000
+/* Direcciones base del SIO para control GPIO */
 #define SIO_GPIO_IN (SIO_BASE + 0x004)
 #define SIO_GPIO_OUT_SET (SIO_BASE + 0x014)
 #define SIO_GPIO_OUT_CLR (SIO_BASE + 0x018)
 #define SIO_GPIO_OE_SET (SIO_BASE + 0x024)
 #define SIO_GPIO_OE_CLR (SIO_BASE + 0x028)
 
-/* IO bank 0 base address */
-// #define IO_BANK0_BASE 0x40014000
+/* Direcciones de IO_BANK0 para funcion de pin */
 #define IO_BANK0_GPIO_CTRL(pin) (IO_BANK0_BASE + 0x004 + (pin) * 8)
 #define GPIO_FUNC_SIO 5
 
-/* PADS Control for Pull-Up/Down */
-// #define PADS_BANK0_BASE 0x4001c000
+/* Direcciones de PADS_BANK0 para resistencias pull */
 #define PADS_GPIO(x) (PADS_BANK0_BASE + 0x04 + (x)*4)
 
-
-/* * INTERRUPT REGISTERS (PROC0)
- * INTE0: Pins 0-7   (Offset 0x100)
- * INTE1: Pins 8-15  (Offset 0x104)
- * INTE2: Pins 16-23 (Offset 0x108)
- * INTE3: Pins 24-29 (Offset 0x10C)
- */
+/* Registros de habilitacion de interrupciones GPIO por procesador */
 #define IO_BANK0_PROC0_INTE0_BASE (IO_BANK0_BASE + 0x100)
 #define IO_BANK0_PROC1_INTE0_BASE (IO_BANK0_BASE + 0x110)
 
-/* * RAW INTERRUPT STATUS (INTR)
- * INTR0: Pins 0-7   (Offset 0x0F0)
- * INTR1: Pins 8-15  (Offset 0x0F4)
- * ...
- */
+/* Registros de estado raw de interrupciones (INTR) */
 #define IO_BANK0_INTR0_BASE (IO_BANK0_BASE + 0x0F0)
 
 /**
- * @brief Initialize a GPIO pin for SIO and set its direction.
- * @param pin GPIO number.
- * @param output 1 for output, 0 for input.
+ * @brief Inicializa un pin GPIO para funcion SIO y configura direccion.
+ *
+ * Escribe en IO_BANK0_GPIO_CTRL para seleccionar funcion SIO (5),
+ * luego habilita o deshabilita la salida via SIO_GPIO_OE.
+ *
+ * @param pin Numero de GPIO (0-29).
+ * @param output 1 para configurar como salida, 0 como entrada.
  */
 void k_gpio_init(uint32_t pin, uint32_t output)
 {
@@ -56,9 +63,12 @@ void k_gpio_init(uint32_t pin, uint32_t output)
 }
 
 /**
- * @brief Set a GPIO output level.
- * @param pin GPIO number.
- * @param value 1 to set high, 0 to set low.
+ * @brief Establece el nivel de salida de un pin GPIO.
+ *
+ * Escribe en SIO_GPIO_OUT_SET o SIO_GPIO_OUT_CLR segun el valor.
+ *
+ * @param pin Numero de GPIO.
+ * @param value 1 para nivel alto, 0 para nivel bajo.
  */
 void k_gpio_set(uint32_t pin, uint32_t value)
 {
@@ -69,9 +79,12 @@ void k_gpio_set(uint32_t pin, uint32_t value)
 }
 
 /**
- * @brief Read a GPIO input level.
- * @param pin GPIO number.
- * @return 1 if high, 0 if low.
+ * @brief Lee el nivel de entrada de un pin GPIO.
+ *
+ * Lee el registro SIO_GPIO_IN y extrae el bit correspondiente.
+ *
+ * @param pin Numero de GPIO.
+ * @return 1 si el pin esta en alto, 0 si esta en bajo.
  */
 int k_gpio_get(uint32_t pin)
 {
@@ -80,7 +93,11 @@ int k_gpio_get(uint32_t pin)
 }
 
 /**
- * @brief Enable internal pull-up to avoid floating pins.
+ * @brief Habilita resistencia pull-up interna en un pin.
+ *
+ * Modifica PADS_BANK0: activa bit 3 (pull-up) y desactiva bit 2 (pull-down).
+ *
+ * @param pin Numero de GPIO.
  */
 void k_gpio_pullup(uint32_t pin) {
     volatile uint32_t *pad_ctrl = (volatile uint32_t *)PADS_GPIO(pin);
@@ -88,6 +105,13 @@ void k_gpio_pullup(uint32_t pin) {
     *pad_ctrl &= ~(1 << 2);
 }
 
+/**
+ * @brief Habilita resistencia pull-down interna en un pin.
+ *
+ * Modifica PADS_BANK0: activa bit 2 (pull-down) y desactiva bit 3 (pull-up).
+ *
+ * @param pin Numero de GPIO.
+ */
 void k_gpio_pulldown(uint32_t pin) {
     volatile uint32_t *pad_ctrl = (volatile uint32_t *)PADS_GPIO(pin);
     *pad_ctrl |= (1 << 2);
@@ -95,9 +119,14 @@ void k_gpio_pulldown(uint32_t pin) {
 }
 
 /**
- * @brief Enable edge interrupt mapped by 8-pin banks.
- * @param pin GPIO number.
- * @param rising_edge 1 for rising edge, 0 for falling edge.
+ * @brief Habilita interrupcion por flanco en un pin GPIO.
+ *
+ * Escribe en los registros INTE del procesador correspondiente.
+ * Los pines se agrupan en bancos de 8, con 4 bits por pin
+ * (bit+2 = falling edge, bit+3 = rising edge).
+ *
+ * @param pin Numero de GPIO.
+ * @param rising_edge 1 para flanco de subida, 0 para flanco de bajada.
  */
 void k_gpio_irq_enable(uint32_t pin, uint32_t rising_edge) {
     uint32_t bank_idx = pin / 8;
@@ -121,33 +150,42 @@ void k_gpio_irq_enable(uint32_t pin, uint32_t rising_edge) {
 }
 
 /**
- * @brief Clear the interrupt using the correct INTR register.
- * @param pin GPIO number.
+ * @brief Limpia la interrupcion pendiente de un pin GPIO.
+ *
+ * Escribe 1s en los bits W1C (Write-1-to-Clear) del registro INTR
+ * para ambos flancos del pin indicado.
+ *
+ * @param pin Numero de GPIO.
  */
 void k_gpio_irq_clear(uint32_t pin) {
     uint32_t bank_idx = pin / 8;
     uint32_t pin_in_bank = pin % 8;
     uint32_t shift = pin_in_bank * 4;
 
-    // INTR0 base + bank offset
     volatile uint32_t *intr_reg = (volatile uint32_t *)(IO_BANK0_INTR0_BASE + (bank_idx * 4));
-    
-    // Clear both edges by writing 1s (W1C)
+
     *intr_reg = (1 << (shift + 2)) | (1 << (shift + 3));
 }
 
-
+/**
+ * @brief Enciende la bomba de riego (nivel alto en pin de bomba).
+ */
 void kernel_pump_on(void) {
     k_gpio_set(IRRIGATION_PUMP_PIN, 1);
 }
 
+/**
+ * @brief Apaga la bomba de riego (nivel bajo en pin de bomba).
+ */
 void kernel_pump_off(void) {
     k_gpio_set(IRRIGATION_PUMP_PIN, 0);
 }
 
 /**
- * @brief Inicializa el ADC para leer el sensor de humedad del suelo. 
- * Configura el pin correspondiente y selecciona la entrada ADC.
+ * @brief Inicializa el ADC para el sensor de humedad del suelo.
+ *
+ * Usa la HAL del SDK para configurar el periferico ADC y seleccionar
+ * la entrada 0 (GPIO 26).
  */
 void k_adc_init(void) {
     adc_init();
@@ -156,8 +194,11 @@ void k_adc_init(void) {
 }
 
 /**
- * @brief Lee el valor del sensor de humedad del suelo a través del ADC.
- * @return Valor de humedad (0-4095).
+ * @brief Lee el valor del sensor de humedad del suelo.
+ *
+ * Realiza una conversion ADC de 12 bits.
+ *
+ * @return Valor de humedad (0-4095). Mayor = mas seco.
  */
 int kernel_read_soil_sensor(void){
     int value = adc_read();

@@ -1,43 +1,39 @@
+/**
+ * @file irrigation_task.c
+ * @brief Tarea consumidora de la cola de riego.
+ *
+ * Recibe mensajes de irrigation_queue y actua:
+ * - MSG_SOIL_DRY / MSG_MANUAL_TRIGGER: inicia ciclo de riego.
+ * - MSG_SOIL_WET: actualiza display con estado normal.
+ *
+ * Corre en Core 1 (plano critico).
+ */
+
 #include <stdio.h>
 #include <string.h>
-#include "pico/stdlib.h"
 
 #include "user_app.h"
 #include "message_queue.h"
 #include "syscalls.h"
-#include "delay.h"
 
-/**
- * @brief Ejecuta el proceso de riego.
- * 
- * Enciende la bomba usando un semáforo para exclusión mutua
- * y actualiza el display durante el proceso.
- */
 static void perform_irrigation(void) {
     message_t out_msg;
 
     out_msg.type = MSG_DISPLAY_TEXT;
-    strncpy(out_msg.text, "MODO: REGANDO", sizeof(out_msg.text));
+    strncpy(out_msg.text, "REGANDO...", sizeof(out_msg.text));
     mq_send(&display_queue, &out_msg);
 
     sys_sem_wait(&irrigation_pump_sem);
-
     sys_request_irrigation();
-
     sys_sem_post(&irrigation_pump_sem);
 
-    // Volver a modo espera
     out_msg.type = MSG_DISPLAY_TEXT;
-    strncpy(out_msg.text, "MODO: ESPERA", sizeof(out_msg.text));
+    strncpy(out_msg.text, "RIEGO COMPLETO", sizeof(out_msg.text));
     mq_send(&display_queue, &out_msg);
 }
 
-/**
- * @brief Tarea de riego.
- */
 void irrigation_task(void) {
     sys_print("[Irrigation Task] Iniciada.\n");
-    setup_irrigation();
 
     message_t msg;
     message_t out_msg;
@@ -46,48 +42,27 @@ void irrigation_task(void) {
         sys_heartbeat();
 
         if (mq_receive(&irrigation_queue, &msg) == 0) {
-
             switch (msg.type) {
-
                 case MSG_SOIL_DRY:
-
                     out_msg.type = MSG_LOG_TEXT;
-                    strncpy(out_msg.text,
-                            "Suelo seco. Regando...",
+                    strncpy(out_msg.text, "Suelo seco. Regando...",
                             sizeof(out_msg.text));
-
                     mq_send(&log_queue, &out_msg);
-
                     perform_irrigation();
                     break;
 
                 case MSG_SOIL_WET:
-
                     out_msg.type = MSG_LOG_TEXT;
-                    strncpy(out_msg.text,
-                            "Suelo Humedo.",
+                    strncpy(out_msg.text, "Humedad normal.",
                             sizeof(out_msg.text));
-
                     mq_send(&log_queue, &out_msg);
-
-                    out_msg.type = MSG_DISPLAY_TEXT;
-                    strncpy(out_msg.text,
-                            "Suelo: Humedo.",
-                            sizeof(out_msg.text));
-
-                    mq_send(&display_queue, &out_msg);
-
                     break;
 
                 case MSG_MANUAL_TRIGGER:
-
                     out_msg.type = MSG_LOG_TEXT;
-                    strncpy(out_msg.text,
-                            "Riego Manual.",
+                    strncpy(out_msg.text, "Riego manual activado.",
                             sizeof(out_msg.text));
-
                     mq_send(&log_queue, &out_msg);
-
                     perform_irrigation();
                     break;
 

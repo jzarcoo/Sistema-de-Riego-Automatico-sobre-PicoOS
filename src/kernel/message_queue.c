@@ -1,8 +1,25 @@
-﻿#include "message_queue.h"
+/**
+ * @file message_queue.c
+ * @brief Colas de mensajes para comunicacion entre tareas (IPC).
+ *
+ * Implementa un buffer circular thread-safe mediante deshabilitacion
+ * de interrupciones. Soporta envio desde contexto normal (mq_send)
+ * y desde ISR (mq_send_from_isr). Las tareas productoras envian
+ * mensajes tipados (MSG_SOIL_DRY, MSG_LOG_TEXT, etc.) y las tareas
+ * consumidoras los extraen con mq_receive. Este esquema productor-
+ * consumidor desacopla las tareas y evita competencia por recursos.
+ */
+
+#include "message_queue.h"
 #include "hardware/irq.h"
 #include "hardware/sync.h"
+
 /**
- * @brief Inicializa la cola de mensajes, estableciendo los i­ndices y el contador a cero.
+ * @brief Inicializa la cola de mensajes.
+ *
+ * Establece head, tail y count a cero. Debe llamarse antes
+ * de cualquier operacion send/receive.
+ *
  * @param q Puntero a la cola de mensajes a inicializar.
  */
 void mq_init(message_queue_t *q) {
@@ -11,11 +28,15 @@ void mq_init(message_queue_t *q) {
     q->count = 0;
 }
 
-/** 
- * @brief Envi­a un mensaje a la cola. Si la cola esta llena, devuelve -1.
+/**
+ * @brief Envia un mensaje a la cola (contexto normal).
+ *
+ * Deshabilita interrupciones para garantizar atomicidad.
+ * Si la cola esta llena, retorna -1 sin bloquear.
+ *
  * @param q Puntero a la cola de mensajes.
- * @param msg Puntero al mensaje a enviar.
- * @return 0 si el mensaje se envia correctamente, -1 si la cola esta llena.
+ * @param msg Puntero al mensaje a enviar (se copia al buffer).
+ * @return 0 si el mensaje se envio correctamente, -1 si la cola esta llena.
  */
 int mq_send(message_queue_t *q, message_t *msg) {
     uint32_t status = save_and_disable_interrupts();
@@ -31,8 +52,14 @@ int mq_send(message_queue_t *q, message_t *msg) {
 }
 
 /**
- * @brief ISR-safe enqueue. Minimal, non-blocking, should be called from IRQ handlers.
- * Does not change interrupt state; returns -1 if queue is full.
+ * @brief Envia un mensaje desde un handler de interrupcion (ISR-safe).
+ *
+ * No modifica el estado de interrupciones (ya estamos en ISR).
+ * No bloquea; retorna -1 si la cola esta llena.
+ *
+ * @param q Puntero a la cola de mensajes.
+ * @param msg Puntero al mensaje a enviar.
+ * @return 0 si exitoso, -1 si la cola esta llena.
  */
 int mq_send_from_isr(message_queue_t *q, message_t *msg) {
     if (q->count >= QUEUE_SIZE) {
@@ -45,10 +72,14 @@ int mq_send_from_isr(message_queue_t *q, message_t *msg) {
 }
 
 /**
- * @brief Recibe un mensaje de la cola. Si la cola estÃ¡ vacÃ­a, devuelve -1.
+ * @brief Recibe un mensaje de la cola.
+ *
+ * Deshabilita interrupciones para garantizar atomicidad.
+ * Si la cola esta vacia, retorna -1 sin bloquear.
+ *
  * @param q Puntero a la cola de mensajes.
- * @param msg Puntero donde se almacenarÃ¡ el mensaje recibido.
- * @return 0 si el mensaje se recibiÃ³ correctamente, -1 si la cola estÃ¡ vacÃ­a.
+ * @param msg Puntero donde se almacenara el mensaje recibido.
+ * @return 0 si el mensaje se recibio correctamente, -1 si la cola esta vacia.
  */
 int mq_receive(message_queue_t *q, message_t *msg) {
     uint32_t status = save_and_disable_interrupts();
@@ -62,4 +93,3 @@ int mq_receive(message_queue_t *q, message_t *msg) {
     restore_interrupts(status);
     return 0;
 }
-

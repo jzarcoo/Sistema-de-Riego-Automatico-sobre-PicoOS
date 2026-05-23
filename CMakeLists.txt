@@ -18,6 +18,8 @@ add_executable(ProyectoFinal
     src/arch/syscalls.s
     
     # === ARCHIVOS DEL KERNEL ===
+    src/kernel/mpu.c
+    src/kernel/display_manager.c
     src/kernel/filesystem.c
     src/kernel/irrigation_manager.c
     src/kernel/kernel_drivers.c
@@ -53,6 +55,7 @@ target_link_libraries(ProyectoFinal
     pico_stdlib
     pico_multicore
     hardware_adc
+    hardware_i2c
     hardware_exception
     hardware_flash
     hardware_uart

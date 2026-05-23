@@ -1,3 +1,21 @@
+/**
+ * @file filesystem.c
+ * @brief Sistema de archivos plano (PicoFS) sobre memoria Flash del RP2040.
+ *
+ * Implementa un filesystem minimalista con tabla de metadatos en el
+ * primer sector de Flash y datos contiguos en sectores subsiguientes.
+ * Operaciones soportadas: format, init, create, write, read, delete,
+ * append, compact y dump.
+ *
+ * Restricciones de Flash:
+ * - Solo se puede borrar por sectores completos (4096 bytes).
+ * - Solo se puede programar por paginas (256 bytes).
+ * - Escritura requiere read-modify-write para preservar datos existentes.
+ *
+ * Seguridad multicore: Todas las operaciones Flash usan flash_safe_begin/end
+ * que pausan el otro core (multicore_lockout) y deshabilitan interrupciones.
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include "pico/stdlib.h"
@@ -6,24 +24,39 @@
 
 #include "filesystem.h"
 
-// Puntero para leer la memoria Flash directamente mapeada (XIP - Execute In Place)
+/** Puntero XIP a la tabla de metadatos en Flash (lectura directa) */
 const MetaData_Table* fs_meta = (const MetaData_Table*)(FS_BASE_ADDRESS);
 
+/** Almacena el estado de interrupciones para restaurar despues de Flash ops */
 static uint32_t flash_saved_ints;
 
+/**
+ * @brief Prepara el sistema para una operacion de Flash segura.
+ *
+ * Pausa el otro core (multicore_lockout) y deshabilita interrupciones.
+ * Necesario porque durante flash_range_erase/program, el XIP se
+ * desactiva y ningun codigo puede ejecutar desde Flash.
+ */
 static void flash_safe_begin(void) {
     multicore_lockout_start_blocking();
     flash_saved_ints = save_and_disable_interrupts();
 }
 
+/**
+ * @brief Finaliza la operacion de Flash segura.
+ * Restaura interrupciones y libera el otro core.
+ */
 static void flash_safe_end(void) {
     restore_interrupts(flash_saved_ints);
     multicore_lockout_end_blocking();
 }
 
-// --- MÓDULO 1: Inicialización y Superbloque ---
-
-// fs_format() se entrega resuelta como ejemplo de uso de la API de Flash
+/**
+ * @brief Formatea el filesystem (borra todos los archivos).
+ *
+ * Escribe un nuevo MetaData_Table con magic_number valido y
+ * todas las entradas en STATUS_FREE. Borra el sector de metadatos.
+ */
 void fs_format() {
     MetaData_Table new_meta;
     memset(&new_meta, 0xFF, sizeof(MetaData_Table));
@@ -42,34 +75,36 @@ void fs_format() {
     printf("FS: Formateado exitosamente.\n");
 }
 
+/**
+ * @brief Inicializa el filesystem.
+ *
+ * Verifica el magic_number en la tabla de metadatos. Si no coincide
+ * (Flash virgen o corrupta), ejecuta un formateo automatico.
+ */
 void fs_init() {
     if (fs_meta->magic_number != MAGIC_NUMBER) {
         printf("FS Warning: Magic Number no encontrado. Forzando formateo...\n");
         fs_format();
         return;
-    } 
+    }
     printf("FS Inicializado exitosamente. Magic Number: 0x%08X\n", fs_meta->magic_number);
 }
 
-// --- MÓDULO 2: Asignación de Metadatos y Alineación ---
-
+/**
+ * @brief Crea un archivo nuevo en el filesystem.
+ *
+ * Busca una entrada libre en la tabla de metadatos, calcula el offset
+ * contiguo despues del ultimo archivo, y registra el nuevo archivo.
+ *
+ * @param name Nombre del archivo (maximo 11 caracteres + null).
+ * @return Indice de la entrada creada, -1 si no hay espacio, -2 si ya existe.
+ */
 int fs_create(const char* name) {
     if (strlen(name) >= 12) {
         printf("FS Error: Nombre muy largo.\n");
         return -1;
     }
-    // CHALLENGE 2 - Creación de archivo
-    // 1. Itera sobre fs_meta->entries buscando la primera entrada con status == STATUS_FREE.
-    // 2. Durante la iteración, verifica que no exista ya un archivo con el mismo nombre y status == STATUS_OCCUPIED.
-    //    Si existe, retorna error (-2).
-    // 3. Calcula la variable 'next_free_offset'. Para un FS contiguo, es el offset del último archivo
-    //    redondeado hacia arriba al siguiente FLASH_SECTOR_SIZE (4096).
-    // 4. Copia los metadatos actuales a una variable local: MetaData_Table updated_meta;
-    // 5. En 'updated_meta', asigna a la entrada libre encontrada: el nombre, el offset calculado,
-    //    tamaño 0, y cambia su estado a STATUS_OCCUPIED.
-    // 6. Escribe 'updated_meta' en la Flash (revisa fs_format para ver cómo borrar y programar).
-    // 7. Retorna el índice (free_index) creado.
-    int free_index = -1, next_free_offset = FS_BASE_OFFSET + FLASH_SECTOR_SIZE; 
+    int free_index = -1, next_free_offset = FS_BASE_OFFSET + FLASH_SECTOR_SIZE;
     for (int i = 0; i < MAX_FILES; i++) {
         if (fs_meta->entries[i].status == STATUS_FREE && free_index == -1) {
             free_index = i;
@@ -89,7 +124,7 @@ int fs_create(const char* name) {
         }
     }
     if (free_index == -1) {
-        printf("FS Error: No hay espacio para más archivos.\n");
+        printf("FS Error: No hay espacio para mas archivos.\n");
         return -1;
     }
 
@@ -113,12 +148,20 @@ int fs_create(const char* name) {
     return free_index;
 }
 
-// --- MÓDULO 3: Read-Modify-Write ---
-
+/**
+ * @brief Escribe datos en un archivo existente (sobreescribe).
+ *
+ * Realiza read-modify-write: borra los sectores necesarios y programa
+ * los datos por paginas de 256 bytes. Actualiza el tamano en metadatos.
+ *
+ * @param name Nombre del archivo destino.
+ * @param data Puntero a los datos a escribir.
+ * @param size Tamano en bytes de los datos.
+ * @return 0 si exitoso, -1 si el archivo no existe o no hay espacio.
+ */
 int fs_write(const char* name, const uint8_t* data, uint32_t size) {
     int target_idx = -1;
 
-    // Búsqueda del archivo
     for (int i = 0; i < MAX_FILES; i++) {
         if (fs_meta->entries[i].status == STATUS_OCCUPIED &&
             strncmp(fs_meta->entries[i].name, name, 12) == 0) {
@@ -132,16 +175,11 @@ int fs_write(const char* name, const uint8_t* data, uint32_t size) {
         return -1;
     }
 
-    //  Escritura Flash y Actualización de Metadatos
-    // 1. Recupera el offset asignado para este archivo desde los metadatos.
     uint32_t offset = fs_meta->entries[target_idx].offset;
-    // 2. Calcula cuántos sectores requiere 'size' bytes. Recuerda que solo puedes borrar en
-    //    múltiplos de FLASH_SECTOR_SIZE (4096).
     int sectors_needed = (size + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE;
     int total_size = sectors_needed * FLASH_SECTOR_SIZE;
 
-    // extra: prevención de desbordamiento
-    int max_offset = FS_BASE_OFFSET + FLASH_SECTOR_SIZE * MAX_FILES; 
+    int max_offset = FS_BASE_OFFSET + FLASH_SECTOR_SIZE * MAX_FILES;
     if (offset + total_size > max_offset) {
         printf("FS Error: No hay suficiente espacio contiguo para escribir '%s'.\n", name);
         return -1;
@@ -193,9 +231,19 @@ int fs_write(const char* name, const uint8_t* data, uint32_t size) {
     return 0;
 }
 
+/**
+ * @brief Lee el contenido de un archivo.
+ *
+ * Usa lectura XIP (Execute-In-Place): la Flash esta mapeada en el
+ * espacio de direcciones a partir de XIP_BASE, asi que se puede
+ * leer directamente con memcpy sin operaciones especiales.
+ *
+ * @param name Nombre del archivo a leer.
+ * @param buffer Buffer destino donde se copiaran los datos.
+ * @param max_size Tamano maximo a leer (bytes).
+ * @return Cantidad de bytes leidos, o -1 si el archivo no existe.
+ */
 int fs_read(const char* name, uint8_t* buffer, uint32_t max_size) {
-    //  Lectura XIP (Execute-In-Place)
-    // 1. Busca el índice del archivo por su nombre (igual que en fs_write).
     int target_idx = -1;
     for (int i = 0; i < MAX_FILES; i++) {
         if (fs_meta->entries[i].status == STATUS_OCCUPIED &&
@@ -204,27 +252,27 @@ int fs_read(const char* name, uint8_t* buffer, uint32_t max_size) {
             break;
         }
     }
-    // 2. Si no se encuentra, retorna -1.
     if (target_idx == -1) {
         printf("FS Error: Archivo '%s' no encontrado.\n", name);
         return -1;
     }
-    // 3. Obtén el 'file_size' real del archivo desde los metadatos.
     uint32_t file_size = fs_meta->entries[target_idx].size;
-    // 4. Determina cuánto vas a leer: el mínimo entre 'file_size' y 'max_size'.
     uint32_t to_read = (file_size < max_size) ? file_size : max_size;
-    // 5. Calcula la dirección de memoria física: (XIP_BASE + offset).
     uint32_t address = XIP_BASE + fs_meta->entries[target_idx].offset;
-    // 6. Usa memcpy() para copiar los bytes directamente de la dirección física al buffer.
     memcpy(buffer, (const void*)address, to_read);
-    // 7. Retorna la cantidad de bytes leídos.
     return to_read;
 }
-    
-// --- MÓDULO 4: Borrado Lógico & Visualización ---
 
+/**
+ * @brief Elimina un archivo (borrado logico).
+ *
+ * Marca la entrada como STATUS_DELETED en la tabla de metadatos.
+ * Los datos permanecen en Flash hasta que se ejecute fs_compact().
+ *
+ * @param name Nombre del archivo a borrar.
+ * @return 0 si exitoso, -1 si el archivo no existe.
+ */
 int fs_delete(const char* name) {
-    // 1. Busca el índice del archivo solicitado. Si no existe, retorna -1.
     int target_idx = -1;
     for (int i = 0; i < MAX_FILES; i++) {
         if (fs_meta->entries[i].status == STATUS_OCCUPIED &&
@@ -253,16 +301,16 @@ int fs_delete(const char* name) {
     return 0;
 }
 
+/**
+ * @brief Muestra el mapa del filesystem por consola serial.
+ * Lista todas las entradas no libres con nombre, offset, tamano y estado.
+ */
 void fs_dump() {
     printf("\n=== Mapa de PicoFS ===\n");
     printf("Magic Number: 0x%08X\n", fs_meta->magic_number);
     printf("%-12s  %-10s | %-8s | %-8s\n", "Name", "Offset", "Size", "Status");
     printf("------------------------------------------------\n");
 
-    // Volcado de la tabla
-    // 1. Itera sobre las entradas de metadatos (MAX_FILES).
-    // 2. Si el estado es distinto a STATUS_FREE, imprime sus campos con formato similar al encabezado.
-    // 3. Para el estado, convierte los códigos Hex a strings (Ej. "OCCUPIED" o "DELETED").
     for (int i = 0; i < MAX_FILES; i++) {
         if (fs_meta->entries[i].status != STATUS_FREE) {
             const char* status_str = (fs_meta->entries[i].status == STATUS_OCCUPIED) ? "OCCUPIED" :
@@ -274,6 +322,13 @@ void fs_dump() {
     printf("==============================\n\n");
 }
 
+/**
+ * @brief Compacta el filesystem eliminando huecos de archivos borrados.
+ *
+ * Reubica archivos validos de forma contigua, recalculando offsets
+ * y moviendo datos en Flash cuando es necesario. Limpia entradas
+ * con STATUS_DELETED.
+ */
 void fs_compact(){
     MetaData_Table updated_meta;
     memcpy(&updated_meta, fs_meta, sizeof(MetaData_Table));
@@ -332,11 +387,16 @@ void fs_compact(){
 }
 
 /**
- * @brief Escribe datos al final de un archivo existente. Implementa un esquema de read-modify-write para preservar los datos anteriores.
+ * @brief Agrega datos al final de un archivo existente (append).
+ *
+ * Implementa read-modify-write: lee el contenido actual del archivo,
+ * concatena los datos nuevos, borra los sectores necesarios,
+ * y reprograma todo el contenido. Actualiza tamano en metadatos.
+ *
  * @param name Nombre del archivo a modificar.
- * @param data Puntero a los datos que se desean agregar al final del archivo.
- * @param size Tamaño en bytes de los datos a escribir.
- * @return 0 si la operación fue exitosa, -1 si el archivo no existe
+ * @param data Puntero a los datos a agregar al final.
+ * @param size Tamano en bytes de los datos nuevos.
+ * @return 0 si exitoso, -1 si el archivo no existe.
  */
 int fs_write_append(const char* name,
                     const uint8_t* data,
@@ -367,20 +427,12 @@ int fs_write_append(const char* name,
     uint32_t new_size =
         current_size + size;
 
-    /*
-     * Flash writes require page alignment.
-     */
-
     uint32_t sectors_needed =
         (new_size + FLASH_SECTOR_SIZE - 1)
         / FLASH_SECTOR_SIZE;
 
     uint32_t total_size =
         sectors_needed * FLASH_SECTOR_SIZE;
-
-    /*
-     * Read old file contents
-     */
 
     uint8_t temp_buffer[total_size];
 

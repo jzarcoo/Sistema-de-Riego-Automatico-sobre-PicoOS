@@ -21,6 +21,7 @@
 .equ SYS_REQUEST_IRRIGATION, 17
 .equ SYS_SLEEP, 18
 .equ SYS_PRINT, 19
+.equ SYS_REQUEST_DISPLAY_UPDATE, 20
 
 @ --- Function: void sys_gpio_dir(int pin, int out) ---
 .global sys_gpio_dir
@@ -173,12 +174,6 @@ sys_sem_init:
 @ --- Function: void sys_adc_init(void) ---
 .global sys_adc_init
 .type sys_adc_init, %function
-# sys_adc_init:
-#     mov r3, r7
-#     movs r7, #SYS_ADC_INIT
-#     svc #0
-#     mov r7, r3
-#     bx lr
 sys_adc_init:
     mov r12, r7
     movs r7, #SYS_ADC_INIT
@@ -226,6 +221,17 @@ sys_print:
     @ r0: pointer to string
     mov r12, r7
     movs r7, #SYS_PRINT
+    svc #0
+    mov r7, r12
+    bx lr
+
+@ --- Function: void sys_request_display_update(const char* text);
+.global sys_request_display_update
+.type sys_request_display_update, %function
+sys_request_display_update:
+    @ r0: pointer to string
+    mov r12, r7
+    movs r7, #SYS_REQUEST_DISPLAY_UPDATE
     svc #0
     mov r7, r12
     bx lr

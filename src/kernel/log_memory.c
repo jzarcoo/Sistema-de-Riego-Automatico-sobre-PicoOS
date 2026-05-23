@@ -1,3 +1,20 @@
+/**
+ * @file log_memory.c
+ * @brief Simulacion de memoria virtual con page cache y reemplazo LRU.
+ *
+ * Implementa un buffer de paginas en RAM que actua como cache entre
+ * las tareas productoras de logs y el almacenamiento persistente en Flash.
+ * Cuando no hay frames libres, simula un "page fault" y aplica el
+ * algoritmo LRU (Least Recently Used) para seleccionar la victima,
+ * volcando su contenido a Flash antes de reutilizar el frame.
+ *
+ * Flujo:
+ * 1. log_cache_write() busca un frame libre.
+ * 2. Si no hay (page fault), evict_lru() encuentra la pagina menos
+ *    usada recientemente, la vuelca a Flash si esta dirty, y libera el frame.
+ * 3. log_flush_all() vuelca todas las paginas dirty (flush periodico).
+ */
+
 #include "log_memory.h"
 #include "logger.h"
 
@@ -5,22 +22,27 @@
 #include <stdio.h>
 
 /**
- * Un log_page_t es una página de log en la cache.
+ * @brief Estructura de una pagina en la cache de logs.
+ *
+ * Cada frame almacena un mensaje de log con metadatos para
+ * controlar validez, modificacion y politica de reemplazo.
  */
 typedef struct {
-    char data[64]; // Mensaje
-    int valid; // Si la página contiene un mensaje 
-    int dirty; // Si la página ha sido modificada desde el último flush
-    int last_use; // Contador para implementar LRU 
+    char data[64];  /**< Contenido del mensaje de log */
+    int valid;      /**< 1 si el frame contiene datos validos */
+    int dirty;      /**< 1 si fue modificado desde el ultimo flush */
+    int last_use;   /**< Contador temporal para politica LRU */
 } log_page_t;
 
+/** Pool de frames de la page cache */
 static log_page_t frames[LOG_FRAMES];
 
+/** Contador global de accesos (reloj logico para LRU) */
 static int timer_counter = 0;
 
 /**
- * @brief Busca un frame libre en la cache. Retorna el índice del frame o -1 si no hay ninguno.
- * @return Índice del frame libre o -1 si no hay ninguno.
+ * @brief Busca un frame libre (invalido) en la cache.
+ * @return Indice del frame libre, o -1 si todos estan ocupados.
  */
 static int find_free_frame(void) {
     for (int i = 0; i < LOG_FRAMES; i++) {
@@ -32,8 +54,13 @@ static int find_free_frame(void) {
 }
 
 /**
- * @brief Reemplazo LRU.
- * @return Índice del frame víctima.
+ * @brief Selecciona la pagina victima usando politica LRU.
+ *
+ * Recorre todos los frames y selecciona el que tiene el menor
+ * valor de last_use (menos recientemente usado). Si la pagina
+ * esta dirty, la vuelca a Flash antes de liberarla.
+ *
+ * @return Indice del frame victima (listo para reutilizar).
  */
 static int evict_lru(void) {
     int victim = 0;
@@ -42,9 +69,6 @@ static int evict_lru(void) {
             victim = i;
         }
     }
-    /*
-     * Flush to filesystem before eviction.
-     */
     if (frames[victim].dirty) {
         logger_write(frames[victim].data);
         printf("[MEMORIA] Volcando frame %d -> Flash\n", victim);
@@ -53,23 +77,24 @@ static int evict_lru(void) {
 }
 
 /**
- * @brief Inicializa la memoria de logs.
+ * @brief Inicializa la page cache de logs.
+ * Pone todos los frames en estado invalido (vacios).
  */
 void log_memory_init(void) {
     memset(frames, 0, sizeof(frames));
 }
 
-/** 
- * @brief Escribe un mensaje de log en la cache. 
- * Si no hay frames libres, se hace un flush de la página LRU.
- * @param msg Mensaje de log a escribir.
+/**
+ * @brief Escribe un mensaje de log en la cache.
+ *
+ * Busca un frame libre; si no hay, simula un page fault e invoca
+ * el algoritmo de reemplazo LRU. Marca el frame como valid y dirty.
+ *
+ * @param msg Mensaje de log a almacenar (maximo 63 caracteres).
  */
 void log_cache_write(const char* msg) {
     timer_counter++;
     int frame = find_free_frame();
-    /*
-     * Simulated page fault.
-     */
     if (frame == -1) {
         printf("[Cache evict] No hay frames libres.\n");
         frame = evict_lru();
@@ -82,7 +107,10 @@ void log_cache_write(const char* msg) {
 }
 
 /**
- * @brief Hace flush de todas las páginas sucias a Flash.
+ * @brief Vuelca todas las paginas dirty a Flash (flush completo).
+ *
+ * Recorre todos los frames validos con dirty=1, los escribe en
+ * el filesystem via logger_write(), y limpia el flag dirty.
  */
 void log_flush_all(void) {
     for (int i = 0; i < LOG_FRAMES; i++) {

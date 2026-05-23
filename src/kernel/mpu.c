@@ -10,7 +10,6 @@
  * - Region 1: IO_BANK0 (0x40014000, 16KB) solo privilegiado.
  * - Region 2: PADS_BANK0 (0x4001C000, 4KB) solo privilegiado.
  * - Region 3: I2C0 (0x40044000, 4KB) solo privilegiado.
- * - Region 4: UART0 (0x40034000, 4KB) solo privilegiado.
  */
 
 #include <stdint.h>
@@ -20,7 +19,6 @@
 #define MPU_RBAR   (*(volatile uint32_t*)0xE000ED9C)
 #define MPU_RASR   (*(volatile uint32_t*)0xE000EDA0)
 
-/** @brief Configura regiones MPU y activa proteccion con PRIVDEFENA. */
 void mpu_init(void) {
     __asm volatile("dmb");
 
@@ -52,16 +50,6 @@ void mpu_init(void) {
                (1 << 24) |   // AP=001: Solo privilegiado
                (11 << 1) |   // SIZE=11: 4KB
                (1 << 0);     // ENABLE
-
-    /*
-    // Region 4: UART0 — solo kernel (fuerza sys_print)
-    MPU_RNR = 4;
-    MPU_RBAR = 0x40034000;
-    MPU_RASR = (1 << 28) |   // XN
-               (1 << 24) |   // AP=001: Solo privilegiado
-               (11 << 1) |   // SIZE=11: 4KB
-               (1 << 0);     // ENABLE
-    */
 
     MPU_CTRL = (1 << 0) | (1 << 2);  // ENABLE + PRIVDEFENA
 
