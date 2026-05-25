@@ -16,7 +16,7 @@
  */
 
 #include "log_memory.h"
-#include "logger.h"
+#include "flash_queue.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -70,8 +70,8 @@ static int evict_lru(void) {
         }
     }
     if (frames[victim].dirty) {
-        logger_write(frames[victim].data);
-        printf("[MEMORIA] Volcando frame %d -> Flash\n", victim);
+        flash_queue_push(frames[victim].data);
+        printf("[EVICT] frame %d -> flash queue\n", victim);
     }
     return victim;
 }
@@ -115,9 +115,9 @@ void log_cache_write(const char* msg) {
 void log_flush_all(void) {
     for (int i = 0; i < LOG_FRAMES; i++) {
         if (frames[i].valid && frames[i].dirty) {
-            logger_write(frames[i].data);
+            flash_queue_push(frames[i].data);
             frames[i].dirty = 0;
-            printf("[FLUSH] Frame %d volcado a Flash.\n", i);
+            printf("[FLUSH] Frame %d -> flash queue\n", i);
         }
     }
 }

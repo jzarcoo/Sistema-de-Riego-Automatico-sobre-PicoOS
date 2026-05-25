@@ -31,6 +31,7 @@ add_executable(ProyectoFinal
     src/kernel/scheduler.c
     src/kernel/semaphore.c
     src/kernel/watchdog_supervisor.c
+    src/kernel/flash_queue.c
 
     # === ARCHIVOS DE USUARIO ===
     src/user/user_app.c

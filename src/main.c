@@ -32,6 +32,7 @@
 #include "user_app.h"
 #include "message_queue.h"
 #include "semaphore.h"
+#include "flash_queue.h"
 
 extern void irrigation_task(void);
 extern void sensor_task(void);
@@ -102,7 +103,7 @@ void __attribute__((naked)) HardFault_Handler(void) {
 static void irrigation_update_task(void) {
     while (1) {
         sys_heartbeat();
-        sys_irrigation_update();
+        irrigation_manager_update();
     }
 }
 
@@ -188,6 +189,7 @@ int main() {
     mq_init(&display_queue);
     k_sem_init(&logger_sem, 1);
     k_sem_init(&display_sem, 1);
+    flash_queue_init();
     printf("[BOOT] IPC (colas + semaforos) OK.\n");
 
     /* --- Crear tareas --- */
@@ -210,6 +212,9 @@ int main() {
     systick_init(1250000);
 
     while (1) {
+        if (flash_work_queue.count > 0) {
+            flash_queue_process();
+        }
         __asm volatile ("wfi");
     }
 }

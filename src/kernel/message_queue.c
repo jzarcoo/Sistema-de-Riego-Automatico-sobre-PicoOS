@@ -10,9 +10,21 @@
  * consumidor desacopla las tareas y evita competencia por recursos.
  */
 
+#include <stdio.h>
 #include "message_queue.h"
 #include "hardware/irq.h"
 #include "hardware/sync.h"
+
+static int mq_check(message_queue_t *q, const char *ctx) {
+    if (q->count < 0 || q->count > QUEUE_SIZE ||
+        q->head < 0 || q->head >= QUEUE_SIZE ||
+        q->tail < 0 || q->tail >= QUEUE_SIZE) {
+        printf("[MQ CORRUPT] %s count=%d head=%d tail=%d\n",
+               ctx, q->count, q->head, q->tail);
+        return 1;
+    }
+    return 0;
+}
 
 /**
  * @brief Inicializa la cola de mensajes.
@@ -40,6 +52,7 @@ void mq_init(message_queue_t *q) {
  */
 int mq_send(message_queue_t *q, message_t *msg) {
     uint32_t status = save_and_disable_interrupts();
+    if (mq_check(q, "send")) { restore_interrupts(status); return -1; }
     if (q->count >= QUEUE_SIZE) {
         restore_interrupts(status);
         return -1;
@@ -83,6 +96,7 @@ int mq_send_from_isr(message_queue_t *q, message_t *msg) {
  */
 int mq_receive(message_queue_t *q, message_t *msg) {
     uint32_t status = save_and_disable_interrupts();
+    if (mq_check(q, "recv")) { restore_interrupts(status); return -1; }
     if (q->count <= 0) {
         restore_interrupts(status);
         return -1;

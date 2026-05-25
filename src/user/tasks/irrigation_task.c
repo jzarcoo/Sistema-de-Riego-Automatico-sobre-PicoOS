@@ -21,16 +21,13 @@ static void display_row(int row, const char *text) {
     mq_send(&display_queue, &msg);
 }
 
-static void drain_triggers(void) {
+static void drain_queue(void) {
     message_t discard;
-    while (mq_receive(&irrigation_queue, &discard) == 0) {
-        if (discard.type == MSG_MANUAL_TRIGGER) continue;
-        mq_send(&irrigation_queue, &discard);
-        break;
-    }
+    while (mq_receive(&irrigation_queue, &discard) == 0);
 }
 
 static void perform_irrigation(void) {
+    sys_heartbeat();
     sys_print("[BOMBA] ON\n");
     display_row(DISPLAY_ROW_PUMP, "BOMBA: ON");
     display_row(DISPLAY_ROW_EVENT1, "Regando...");
@@ -40,17 +37,15 @@ static void perform_irrigation(void) {
 
     sys_sleep(4000);
 
+    sys_heartbeat();
     sys_sem_post(&irrigation_pump_sem);
 
     sys_print("[BOMBA] OFF\n");
     display_row(DISPLAY_ROW_PUMP, "BOMBA: OFF");
     display_row(DISPLAY_ROW_EVENT1, "Riego completo.");
 
-    /* Drenar triggers falsos acumulados por EMI del relay */
-    drain_triggers();
-    /* Ventana de 5s post-bomba: ignorar triggers (ruido residual) */
-    sys_sleep(5000);
-    drain_triggers();
+    /* Drenar TODO: triggers falsos + SOIL_DRY viejos */
+    drain_queue();
 }
 
 void irrigation_task(void) {
