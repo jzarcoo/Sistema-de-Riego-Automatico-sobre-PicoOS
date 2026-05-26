@@ -122,16 +122,6 @@ El sistema arranca automaticamente al conectar. Comportamiento:
 │   ├── arch/            # Assembly: PendSV, SVC handler, syscall stubs
 │   ├── kernel/          # Scheduler, MPU, drivers, filesystem, flash queue
 │   └── user/tasks/      # Tareas de usuario (irrigation, sensor, logger, display)
-├── diagrams.py          # Generador de diagramas (matplotlib)
 ├── REPORTE.md           # Reporte academico completo
 └── CMakeLists.txt
 ```
-
-## Generar Diagramas
-
-```bash
-pip install matplotlib
-python3 diagrams.py
-```
-
-Genera: `diagrama_arquitectura.png`, `diagrama_mpu.png`, `diagrama_writeback.png`, `diagrama_ipc.png`
