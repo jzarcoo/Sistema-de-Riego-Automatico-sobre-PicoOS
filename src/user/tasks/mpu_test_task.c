@@ -27,6 +27,7 @@
 
 static int test_phase = 0;
 
+/** @brief Demo de violacion MPU + watchdog. 3 fases: fault, timeout, recovery. */
 void mpu_test_task(void) {
     test_phase++;
 

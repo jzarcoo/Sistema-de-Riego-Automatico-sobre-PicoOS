@@ -35,6 +35,7 @@
 #define SYS_LOG_WRITE 24
 #define SYS_LOG_FLUSH 25
 
+/** @brief Despachador de syscalls. Recibe args del stack frame y ejecuta en modo privilegiado. */
 void kernel_service(uint32_t *svc_args, uint32_t syscall_id) {
     switch (syscall_id) {
         case SYS_GPIO_SET:

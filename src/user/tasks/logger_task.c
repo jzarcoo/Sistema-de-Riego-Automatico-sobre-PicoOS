@@ -3,9 +3,10 @@
  * @brief Tarea de logging con page cache y flush periodico a Flash.
  *
  * Consume mensajes MSG_LOG_TEXT de la cola log_queue y los almacena
- * en la page cache (log_memory). Cada 10 mensajes, ejecuta un flush
- * que vuelca las paginas dirty al filesystem en Flash. El acceso
- * esta protegido por logger_sem.
+ * en la page cache (log_memory). Cada 50 mensajes, ejecuta un flush
+ * que encola las paginas dirty para write-back diferido a Flash
+ * (via flash_queue, procesada por el idle loop del kernel).
+ * El acceso esta protegido por logger_sem.
  *
  * Integra los conceptos de:
  * - Simulacion de memoria virtual (page cache LRU en log_memory.c)

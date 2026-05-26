@@ -36,9 +36,10 @@ static uint32_t flash_saved_ints;
  * Pausa el otro core (multicore_lockout) y deshabilita interrupciones.
  * Necesario porque durante flash_range_erase/program, el XIP se
  * desactiva y ningun codigo puede ejecutar desde Flash.
+ * Usa timeout de 50ms para evitar deadlock si Core 1 esta en SVC.
  */
 static void flash_safe_begin(void) {
-    multicore_lockout_start_blocking();
+    multicore_lockout_start_timeout_us(50000);
     flash_saved_ints = save_and_disable_interrupts();
 }
 

@@ -22,6 +22,7 @@ static volatile int irrigation_requested = 0;
 static int pumping = 0;
 static uint32_t pump_start_tick = 0;
 
+/** @brief Inicializa GPIO bomba (output, pull-down), ADC, y boton (input, pull-down). */
 void irrigation_manager_init(void) {
     k_gpio_init(IRRIGATION_PUMP_PIN, 1);
     k_gpio_set(IRRIGATION_PUMP_PIN, 1);
@@ -33,10 +34,12 @@ void irrigation_manager_init(void) {
     k_gpio_pulldown(BUTTON_PIN);
 }
 
+/** @brief Solicita un ciclo de riego (flag para irrigation_manager_update). */
 void irrigation_manager_request_water(void) {
     irrigation_requested = 1;
 }
 
+/** @brief Maquina de estados: prende bomba si requested, apaga si humedo o timeout. */
 void irrigation_manager_update(void) {
     if (irrigation_requested && !pumping) {
         k_gpio_set(IRRIGATION_PUMP_PIN, 0);

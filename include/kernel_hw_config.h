@@ -3,10 +3,10 @@
  * @brief Mapa de pines fisicos del RP2040 para el sistema de riego.
  *
  * Conexionado:
- * - GPIO 4:  I2C0 SDA -> Display OLED SSD1306
- * - GPIO 5:  I2C0 SCL -> Display OLED SSD1306
- * - GPIO 6:  Salida digital -> Rele/bomba de riego
- * - GPIO 16: Entrada digital -> Boton de riego manual (pull-up)
+ * - GPIO 8:  I2C0 SDA -> Display LCD 2004A (PCF8574)
+ * - GPIO 9:  I2C0 SCL -> Display LCD 2004A (PCF8574)
+ * - GPIO 6:  Salida digital -> Rele/bomba de riego (activa LOW)
+ * - GPIO 14: Entrada digital -> Boton de riego manual (pull-down)
  * - GPIO 26: ADC0 -> Sensor de humedad del suelo
  */
 
@@ -23,9 +23,9 @@
 /* --- Boton de riego manual --- */
 #define BUTTON_PIN               14
 
-/* --- Display OLED (I2C0) --- */
-#define DISPLAY_SDA_PIN          4
-#define DISPLAY_SCL_PIN          5
+/* --- Display LCD 2004A (I2C0) --- */
+#define DISPLAY_SDA_PIN          8
+#define DISPLAY_SCL_PIN          9
 
 #endif
 

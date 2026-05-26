@@ -43,9 +43,9 @@ typedef struct {
  */
 typedef struct {
     message_t buffer[QUEUE_SIZE];   /** Buffer circular de mensajes */
-    int head;                       /** Indice de lectura */
-    int tail;                       /** Indice de escritura */
-    int count;                      /** Mensajes actualmente en cola */
+    volatile int head;              /** Indice de lectura */
+    volatile int tail;              /** Indice de escritura */
+    volatile int count;             /** Mensajes actualmente en cola */
 } message_queue_t;
 
 /** Inicializa la cola (head=tail=count=0) */
