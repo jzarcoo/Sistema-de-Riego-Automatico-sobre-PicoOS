@@ -53,7 +53,6 @@ void mpu_init(void) {
                (11 << 1) |   // SIZE=11: 4KB
                (1 << 0);     // ENABLE
 
-    /*
     // Region 4: UART0 — solo kernel (fuerza sys_print)
     MPU_RNR = 4;
     MPU_RBAR = 0x40034000;
@@ -61,7 +60,6 @@ void mpu_init(void) {
                (1 << 24) |   // AP=001: Solo privilegiado
                (11 << 1) |   // SIZE=11: 4KB
                (1 << 0);     // ENABLE
-    */
 
     MPU_CTRL = (1 << 0) | (1 << 2);  // ENABLE + PRIVDEFENA
 

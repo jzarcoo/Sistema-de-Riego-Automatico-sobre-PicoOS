@@ -26,6 +26,8 @@ void display_task(void) {
                 sys_display_flush();
                 sys_sem_post(&display_sem);
             }
+        } else {
+            sys_sleep(10);
         }
     }
 }

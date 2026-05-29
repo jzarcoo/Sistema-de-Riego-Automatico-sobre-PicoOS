@@ -64,5 +64,6 @@ void mpu_test_task(void) {
 
     while (1) {
         sys_heartbeat();
+        sys_sleep(10);
     }
 }

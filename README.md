@@ -1,30 +1,56 @@
-# Sistema de Riego Automatico sobre PicoOS
+# Sistema de Riego Automático sobre PicoOS
 
-Sistema operativo minimalista (PicoOS) que gestiona riego automatico sobre Raspberry Pi Pico (RP2040). Implementa planificacion Round-Robin, proteccion de memoria (MPU), syscalls, IPC por colas, page cache LRU con write-back diferido a Flash, y tolerancia a fallos.
+![Sistema](img/sistema_completo.png)
+
+Sistema operativo minimalista (PicoOS) que gestiona riego automático sobre Raspberry Pi Pico (RP2040). Implementa planificación Round-Robin, protección de memoria (MPU), syscalls, IPC por colas, page cache LRU con write-back diferido a Flash, y tolerancia a fallos.
+
+## Documentación
+
+- Reporte completo: [REPORTE.md](REPORTE.md)
+- Video de funcionamiento: [ver video](https://canva.link/1fd4zm14b8c9oei)
+
+## Características
+
+- Scheduler Round-Robin preemptivo
+- Multiprocesamiento dual-core (AMP)
+- Protección de memoria mediante MPU
+- Syscalls vía SVC (17 servicios)
+- IPC por colas de mensajes inter-core
+- Semáforos binarios
+- Watchdog de tareas
+- Page Cache LRU con write-back diferido
+- Filesystem PicoFS sobre Flash
+- LCD 2004A por I2C
+- Riego automático y manual
 
 ## Arquitectura
 
 ```
-Core 0 (Gestion)              Core 1 (Control Critico)
+Core 0 (Gestión)              Core 1 (Control Crítico)
 ├── logger_task                ├── irrigation_task
 ├── display_task               ├── sensor_task
 └── mpu_test_task              └── irrigation_update_task
 
-Kernel: MPU (5 regiones) | Scheduler RR | 17 Syscalls | Flash Queue
-IPC: irrigation_queue | log_queue | display_queue | 3 Semaforos
+Kernel:
+- Scheduler Round-Robin preemptivo
+- MPU (5 regiones protegidas)
+- 17 syscalls
+- Flash Queue para write-back diferido
+
+IPC: irrigation_queue | log_queue | display_queue | 3 Semáforos
 ```
 
 ## Conexionado
 
 | Componente | GPIO | Pin Pico | Notas |
 |-----------|------|----------|-------|
-| Bomba (rele) | 6 | Pin 9 | Activa en LOW, pull-down |
-| Sensor humedad | 26 (ADC0) | Pin 31 | Analogico |
-| Boton manual | 14 | Pin 19 | Pull-down, rising edge |
+| Bomba (relevador) | 6 | Pin 9 | Activa en LOW, pull-down |
+| Sensor humedad | 26 (ADC0) | Pin 31 | Analógico |
+| Botón manual | 14 | Pin 19 | Pull-down, rising edge |
 | LCD SDA | 8 | Pin 11 | I2C0, LCD 2004A (PCF8574) |
 | LCD SCL | 9 | Pin 12 | I2C0, 400kHz |
 
-## Compilacion
+## Compilación
 
 ### Requisitos
 
@@ -60,68 +86,43 @@ cp build/ProyectoFinal.uf2 /media/$USER/RPI-RP2/
 # Arrastrar ProyectoFinal.uf2 a la unidad RPI-RP2
 ```
 
-4. La Pico se reinicia automaticamente
+4. La Pico se reinicia automáticamente
 
 ## Monitor Serial (Debug)
 
-La Pico envia logs por USB CDC (serial virtual). Opciones:
-
-### macOS
+La Pico envía logs por USB CDC (serial virtual):
 
 ```bash
+# macOS
 screen /dev/tty.usbmodem* 115200
-```
 
-### Linux
-
-```bash
+# Linux
 minicom -D /dev/ttyACM0 -b 115200
-# o
-screen /dev/ttyACM0 115200
-```
-
-### Windows (PuTTY)
-
-1. Abrir PuTTY
-2. Connection type: **Serial**
-3. Serial line: `COMx` (revisar en Administrador de Dispositivos → Puertos COM)
-4. Speed: `115200`
-5. Click **Open**
-
-Para encontrar el puerto COM: Administrador de Dispositivos → Puertos (COM y LPT) → "USB Serial Device (COMx)"
-
-### Windows (Terminal)
-
-```powershell
-# PowerShell con Windows Terminal
-# Instalar: winget install Microsoft.WindowsTerminal
-mode COMx: baud=115200
-type COMx
 ```
 
 ## Uso
 
-El sistema arranca automaticamente al conectar. Comportamiento:
+El sistema arranca automáticamente al conectar:
 
 - **Sensor seco** (ADC > 2500): activa bomba, apaga cuando detecta humedad
-- **Boton manual** (GPIO 14): activa un ciclo de riego de ~4s
-- **Display LCD**: muestra humedad, estado bomba, ultimo evento
+- **Botón manual** (GPIO 14): activa un ciclo de riego de ~4s
+- **Display LCD**: muestra humedad, estado bomba, último evento
 - **Logs**: se almacenan en page cache (6 frames LRU) y se persisten a Flash
 
 ## Estructura del Proyecto
 
 ```
 ├── include/
-│   ├── kernel/          # Headers del kernel (scheduler, mpu, syscalls, etc.)
+│   ├── kernel/          # scheduler, mpu, syscalls, drivers, events, queues
 │   ├── filesystem.h     # PicoFS API
 │   ├── flash_queue.h    # Cola write-back diferido
 │   ├── log_memory.h     # Page cache LRU
 │   └── logger.h         # Logger persistente
 ├── src/
 │   ├── main.c           # Boot dual-core, idle loop (flash worker)
-│   ├── arch/            # Assembly: PendSV, SVC handler, syscall stubs
-│   ├── kernel/          # Scheduler, MPU, drivers, filesystem, flash queue
-│   └── user/tasks/      # Tareas de usuario (irrigation, sensor, logger, display)
-├── REPORTE.md           # Reporte academico completo
+│   ├── arch/            # pendsv.s, svc_handler.s, syscalls.s
+│   ├── kernel/          # scheduler, mpu, drivers, filesystem, flash_queue
+│   └── user/tasks/      # irrigation, sensor, logger, display, mpu_test
+├── REPORTE.md           # Reporte académico completo
 └── CMakeLists.txt
 ```

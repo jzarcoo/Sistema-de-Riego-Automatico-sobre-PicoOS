@@ -4,7 +4,7 @@
  *
  * Arquitectura asimetrica del RP2040:
  * - Core 0: Planificador de gestion (display, logs).
- * - Core 1: Plano critico (sensor, riego, trigger).
+ * - Core 1: Plano critico (sensor, riego).
  *
  * Secuencia de boot por core:
  * 1. Inicializar exception handlers.
@@ -108,7 +108,7 @@ static void irrigation_update_task(void) {
 }
 
 /* ================================================================
- * Core 1: Plano critico — sensor, riego, trigger
+ * Core 1: Plano critico — sensor, riego
  * ================================================================ */
 void core1_entry(void) {
     multicore_lockout_victim_init();

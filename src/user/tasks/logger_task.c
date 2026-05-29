@@ -44,6 +44,8 @@ void logger_task(void) {
                 flush_counter++;
                 sys_sem_post(&logger_sem);
             }
+        } else {
+            sys_sleep(10);
         }
         if (flush_counter >= 50) {
             sys_sem_wait(&logger_sem);
